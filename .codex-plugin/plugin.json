@@ -1,0 +1,6 @@
+{
+  "name": "prose-check",
+  "version": "0.3.3",
+  "description": "Checks Codex's final reply against the project's writing rules with TypeSafe Jev.",
+  "hooks": "./hooks/codex.json"
+}

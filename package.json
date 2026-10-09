@@ -1,0 +1,21 @@
+{
+  "name": "prose-check",
+  "version": "0.3.3",
+  "license": "MIT",
+  "private": true,
+  "description": "Checks a coding agent's final reply against the project's writing rules with TypeSafe Jev.",
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "test": "bun run test:unit && bun run test:mod",
+    "test:unit": "bun test ./tests/unit",
+    "test:mod": "claude plugin test .",
+    "typecheck": "bun --bun tsc --noEmit -p tsconfig.json && bun --bun tsc --noEmit -p tsconfig.mod.json",
+    "validate": "claude plugin validate . && sh scripts/validate-muse.sh",
+    "integration": "bun integration/run.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}

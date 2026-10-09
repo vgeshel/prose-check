@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "name": "prose-check",
+  "version": "0.3.3",
+  "description": "Checks Muse's final reply against the project's writing rules with TypeSafe Jev.",
+  "compat": { "source": "native", "manifestDir": ".muse-plugin" },
+  "capabilities": {
+    "skills": [],
+    "commands": [],
+    "mcpServers": [],
+    "reminders": [],
+    "hooks": [
+      {
+        "id": "warm-rules",
+        "event": "SessionStart",
+        "command": ["sh", "hooks/muse-start.sh"],
+        "timeoutMs": 5000
+      },
+      {
+        "id": "check-reply",
+        "event": "Stop",
+        "command": ["sh", "hooks/muse.sh"],
+        "timeoutMs": 320000
+      }
+    ]
+  }
+}

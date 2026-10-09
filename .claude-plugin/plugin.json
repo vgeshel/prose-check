@@ -1,0 +1,35 @@
+{
+  "name": "prose-check",
+  "version": "0.3.3",
+  "description": "Checks the agent's final reply to the human against the project's writing rules with TypeSafe Jev, and asks for one rewrite when it breaks them.",
+  "author": {
+    "name": "Vadim Geshel"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "timeoutMs": {
+      "type": "number",
+      "title": "Jev timeout (ms)",
+      "description": "How long to wait for TypeSafe Jev before passing the reply through unchecked.",
+      "default": 300
+    },
+    "minLength": {
+      "type": "number",
+      "title": "Minimum reply length",
+      "description": "Replies with fewer characters than this pass through unchecked.",
+      "default": 200
+    },
+    "breachThreshold": {
+      "type": "number",
+      "title": "Breach threshold",
+      "description": "Jev's probability, from 0 to 1, at or above which a rule counts as broken.",
+      "default": 0.85
+    },
+    "debug": {
+      "type": "boolean",
+      "title": "Debug records",
+      "description": "Writes one JSON line per extraction event and per check to debug.jsonl in the per-user state directory.",
+      "default": false
+    }
+  }
+}

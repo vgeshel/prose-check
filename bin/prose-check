@@ -1,0 +1,5 @@
+#!/bin/sh
+# The status command, run from a checkout of this repository.
+# Usage: bin/prose-check status codex|muse [--json] [--session ID]
+project="$PWD"
+cd "$(dirname "$0")/.." && exec bun --no-env-file adapters/status.ts --project "$project" "$@"

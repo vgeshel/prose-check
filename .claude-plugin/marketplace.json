@@ -1,0 +1,20 @@
+{
+  "name": "prose-check",
+  "owner": {
+    "name": "Vadim Geshel"
+  },
+  "description": "The prose-check plugin for Claude Code.",
+  "plugins": [
+    {
+      "name": "prose-check",
+      "source": "./",
+      "description": "Checks the agent's final reply in each turn against the project's writing rules with TypeSafe Jev.",
+      "version": "0.3.3",
+      "category": "Productivity",
+      "strict": true,
+      "author": {
+        "name": "Vadim Geshel"
+      }
+    }
+  ]
+}
