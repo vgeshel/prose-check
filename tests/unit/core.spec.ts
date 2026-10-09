@@ -8,7 +8,7 @@ import { projectState, stateRoot } from '../../core/paths'
 import { aggregate } from '../../core/records'
 import { formatStatus } from '../../core/status'
 import { importedPaths } from '../../core/rules'
-import { hashSources, readSources } from '../../core/sources'
+import { hashSources, readSources, sha256Hex } from '../../core/sources'
 import { parseExtraction, parseHook } from '../../adapters/contracts'
 import { apiKey, dotenvValue } from '../../adapters/environment'
 import { readText, writeText } from '../../adapters/files'
@@ -194,6 +194,31 @@ describe('instruction files', () => {
   it('hashes the sources', async () => {
     const sources = await readSources('/p', read({ '/p/AGENTS.md': 'A' }), 'muse')
     expect(await hashSources(sources)).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+describe('sha256Hex', () => {
+  it('resolves within the current task, so the Claude Code test kit can wait for it', async () => {
+    let done = false
+    void sha256Hex('abc').then(() => {
+      done = true
+    })
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve()
+    expect(done).toBe(true)
+  })
+
+  it('equals SHA-256 for standard vectors and random multi-block and non-ASCII text', async () => {
+    expect(await sha256Hex('abc')).toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    )
+    expect(await sha256Hex('')).toBe(
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    )
+    const inputs = ['a'.repeat(55), 'a'.repeat(56), 'a'.repeat(64), 'é漢😀'.repeat(40)]
+    for (let length = 0; length < 300; length += 7)
+      inputs.push(Array.from({ length }, (_, i) => String.fromCharCode(32 + ((i * 37 + length) % 90))).join(''))
+    for (const input of inputs)
+      expect(await sha256Hex(input)).toBe(new Bun.CryptoHasher('sha256').update(input).digest('hex'))
   })
 })
 
