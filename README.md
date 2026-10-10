@@ -84,15 +84,34 @@ Commit this `.claude/settings.json` in the repository:
 Each team member then:
 
 1. Sets the API key as in [Set the API key](#set-the-api-key).
-2. Starts `claude` in the repository and answers "Yes, I trust this folder".
-   Claude Code adds the marketplace and loads the plugin in that session.
-3. Runs `/prose-check` to confirm that the plugin is loaded (next section).
-   If Claude Code reports `/prose-check` as an unknown command, the member
-   installs the plugin for the repository and starts a new session:
+2. Removes any earlier copy of prose-check that they installed from another
+   marketplace, by removing that marketplace:
 
    ```bash
-   claude plugin install prose-check@prose-check --scope project
+   claude plugin marketplace remove <marketplace>
    ```
+
+3. Starts `claude` in the repository. In a checkout they have not opened in
+   Claude Code before, they answer "Yes, I trust this folder". Claude Code
+   then adds the marketplace and loads the plugin in that session.
+4. Runs `/prose-check` to confirm that the plugin is loaded (next section).
+
+In a checkout that the member trusted before the repository enabled
+prose-check, Claude Code does not install the plugin, so `/prose-check` is an
+unknown command. The member installs the plugin once,
+from the `/plugin` menu or with this command, then starts a new session:
+
+```bash
+claude plugin install prose-check@prose-check --scope project
+```
+
+That command also rewrites the repository's `.claude/settings.json`: it moves
+the two prose-check keys to the end of the file without changing their values.
+Restore the file so the checkout stays clean; the install stays in place:
+
+```bash
+git checkout -- .claude/settings.json
+```
 
 ### Confirm that it is running
 
