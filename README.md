@@ -887,11 +887,17 @@ credential of its own instead:
 
 - Claude Code: run `claude setup-token` and export the token it prints as
   `CLAUDE_CODE_OAUTH_TOKEN`.
-- Muse Code: export a Meta API key as `META_API_KEY`.
+- Muse Code: run `sh integration/muse-login.sh` once. Muse Code saves an
+  account login only in a keychain, so the script creates
+  `~/.config/prose-check/muse-home` with a keychain of its own and runs
+  `muse login` there; you approve a code in your browser. When that folder
+  exists, each Muse Code sandbox gets its login and a link to its keychain,
+  never yours. A Meta API key in `META_API_KEY` also works, if the Meta API
+  account has billing set up.
 
 The suite passes `CLAUDE_CODE_OAUTH_TOKEN` only to the Claude Code sandboxes
 and `META_API_KEY` only to the Muse Code sandbox, and stops at setup when a
-keychain sign-in has no such variable.
+keychain sign-in has none of these.
 
 **Cost per run**, measured on 2026-10-08 at version 0.3.0 with every case
 passing on its first attempt:
@@ -939,6 +945,7 @@ before it starts when it finds one.
   repository.
 - `types/index.d.ts`: the per-turn state that the Claude Code hooks share.
 - `tests/`, `integration/`: the tests and the integration suite.
+  `integration/muse-login.sh` makes the suite's own Muse Code login.
 
 ## License
 

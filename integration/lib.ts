@@ -3,7 +3,7 @@
  * a terminal driver on a private tmux socket, the plugin's state files, and
  * the step report.
  */
-import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -67,6 +67,33 @@ const SIGN_IN_VARIABLES: Readonly<Partial<Record<Harness, string>>> = {
   muse: 'META_API_KEY',
 }
 
+/**
+ * A home folder that holds a Muse Code login made only for the suite, in a
+ * keychain of its own: `integration/muse-login.sh` creates it.
+ */
+export const MUSE_TEST_HOME = join(REAL_HOME, '.config/prose-check/muse-home')
+
+/** The password of the test keychain in `MUSE_TEST_HOME`; it guards only the test login. */
+export const MUSE_TEST_KEYCHAIN_PASSWORD = 'prose-check-integration'
+
+/**
+ * Gives a Muse Code sandbox the test login in `MUSE_TEST_HOME`: its
+ * `auth.json` and a link to its keychain, unlocked. The sandbox never sees the
+ * developer's own keychain.
+ */
+async function useMuseTestLogin(home: string): Promise<void> {
+  const keychains = join(MUSE_TEST_HOME, 'Library/Keychains')
+  await mkdir(join(home, '.config/muse'), { recursive: true })
+  await copyFile(join(MUSE_TEST_HOME, '.config/muse/auth.json'), join(home, '.config/muse/auth.json'))
+  await mkdir(join(home, 'Library'), { recursive: true })
+  await symlink(keychains, join(home, 'Library/Keychains'))
+  const unlocked = Bun.spawnSync(
+    ['security', 'unlock-keychain', '-p', MUSE_TEST_KEYCHAIN_PASSWORD, join(keychains, 'login.keychain-db')],
+    { env: { HOME: MUSE_TEST_HOME, PATH: '/usr/bin:/bin' }, stdout: 'ignore', stderr: 'pipe' },
+  )
+  check(unlocked.exitCode === 0, `the test keychain cannot be unlocked: ${unlocked.stderr.toString().trim()}`)
+}
+
 /** The sign-in variable for `harness`, when the developer set it. */
 function signIn(harness: Harness): Record<string, string> {
   const name = SIGN_IN_VARIABLES[harness]
@@ -111,17 +138,20 @@ export async function sandbox(
   if (harness === 'codex' && !(await copyHomeFile(home, '.codex/auth.json')))
     throw new Error('Codex is not signed in: ~/.codex/auth.json is missing')
   if (harness === 'muse') {
-    if (!(await copyHomeFile(home, '.config/muse/auth.json')))
-      throw new Error('Muse Code is not signed in: ~/.config/muse/auth.json is missing')
     await copyHomeFile(home, '.config/muse/settings.json')
-    // auth.json names "storage": "keychain" for a sign-in kept in the macOS keychain.
-    const auth = JSON.parse(await readFile(join(home, '.config/muse/auth.json'), 'utf8')) as {
-      providers?: Record<string, { storage?: string }>
+    if (existsSync(join(MUSE_TEST_HOME, 'Library/Keychains/login.keychain-db'))) await useMuseTestLogin(home)
+    else {
+      if (!(await copyHomeFile(home, '.config/muse/auth.json')))
+        throw new Error('Muse Code is not signed in: ~/.config/muse/auth.json is missing')
+      // auth.json names "storage": "keychain" for a sign-in kept in the macOS keychain.
+      const auth = JSON.parse(await readFile(join(home, '.config/muse/auth.json'), 'utf8')) as {
+        providers?: Record<string, { storage?: string }>
+      }
+      if (Object.values(auth.providers ?? {}).some((provider) => provider.storage === 'keychain') && !process.env.META_API_KEY)
+        throw new Error(
+          'Muse Code keeps its sign-in in the macOS keychain, which the suite does not share. Run `sh integration/muse-login.sh` once to make a login for the suite, or export META_API_KEY.',
+        )
     }
-    if (Object.values(auth.providers ?? {}).some((provider) => provider.storage === 'keychain') && !process.env.META_API_KEY)
-      throw new Error(
-        'Muse Code keeps its sign-in in the macOS keychain, which the suite does not share; export META_API_KEY for the suite.',
-      )
   }
   for (const file of ['CLAUDE.md', 'AGENTS.md'])
     await copyFile(join(FIXTURE, file), join(project, file))
