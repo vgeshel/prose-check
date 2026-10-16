@@ -910,9 +910,14 @@ A case that takes a second attempt adds one session and one or two Jev
 requests. The three harnesses run at the same time; the measured run took
 5 minutes.
 
-**Output:** `integration/runs/<time>/report.md` lists each step with its
-result and evidence. The directory also keeps each harness's home, project,
-session logs, and terminal captures.
+**Output:** `<temporary directory>/prose-check-integration/<time>/report.md`
+lists each step with its result and evidence; the suite prints the path when
+it starts and ends. `--out DIR` chooses another directory. The directory also
+keeps each harness's home, project, session logs, and terminal captures. It
+must not be inside a folder that holds a `CLAUDE.md` or `AGENTS.md`, such as
+this checkout: Claude Code loads the instruction files of every folder above a
+project, so the fixture project would get those rules too. The suite stops
+before it starts when it finds one.
 
 ## Files
 

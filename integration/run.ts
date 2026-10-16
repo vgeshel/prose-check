@@ -7,11 +7,13 @@
  *
  * With no harness named, it runs all three at once. It writes each harness's
  * homes, projects, logs, and terminal captures under the output directory
- * (default `integration/runs/<time>/`) and a summary in `report.md` there.
+ * (default `<temporary directory>/prose-check-integration/<time>/`, outside any
+ * repository) and a summary in `report.md` there.
  * It exits 1 when any step fails.
  */
 import { existsSync } from 'node:fs'
 import { mkdir, statfs, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import type { Harness } from '../core/paths'
@@ -25,7 +27,9 @@ const FLOWS: Record<Harness, (runDir: string, steps: Steps) => Promise<void>> = 
 
 function parse(argv: readonly string[]): { harnesses: Harness[]; out: string } {
   const harnesses: Harness[] = []
-  let out = join(import.meta.dir, 'runs', new Date().toISOString().replace(/[:.]/g, '-'))
+  // Outside any repository: Claude Code loads every CLAUDE.md in the folders
+  // above a project, so a run inside this checkout would load its rules too.
+  let out = join(tmpdir(), 'prose-check-integration', new Date().toISOString().replace(/[:.]/g, '-'))
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index]
     if (value === '--out') {
@@ -63,6 +67,10 @@ async function preflight(harnesses: readonly Harness[], out: string): Promise<vo
       `only ${Math.floor(free / 1024 ** 2)} MB is free under ${out}; the run needs ${needed / 1024 ** 2} MB`,
     )
   if ((process.env.TYPESAFE_API_KEY ?? '') === '') missing.push('TYPESAFE_API_KEY is not set')
+  for (let dir = dirname(out); dirname(dir) !== dir; dir = dirname(dir))
+    for (const file of ['CLAUDE.md', 'AGENTS.md'])
+      if (existsSync(join(dir, file)))
+        missing.push(`${join(dir, file)} is above the output directory; the harnesses would load it. Choose an --out outside that folder.`)
   for (const command of ['git', 'tmux', 'bun', ...harnesses]) {
     const found = await run(['sh', '-c', `command -v ${command}`], { env: { PATH: process.env.PATH ?? '' } })
     if (found.exitCode !== 0) missing.push(`${command} is not on PATH`)

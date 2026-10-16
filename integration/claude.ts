@@ -181,8 +181,13 @@ export async function claude(runDir: string, steps: Steps): Promise<void> {
     // CLAUDE.md imports AGENTS.md, so Claude Code loads both.
     check(JSON.stringify(cache.files) === '["CLAUDE.md","AGENTS.md"]', `instruction files: ${JSON.stringify(cache.files)}`)
     check(cache.state === 'current' && cache.ruleCount > 0, `cache: ${JSON.stringify(cache)}`)
-    const success = records.find((r) => r.type === 'extraction' && r.event === 'success')
-    check(success?.ruleCount === cache.ruleCount, `extraction success record: ${JSON.stringify(success)}`)
+    // In `claude -p` the session-start extraction and the Stop hook's own one can
+    // both finish, with different rule counts; the cache holds one of them.
+    const successes = records.filter((r) => r.type === 'extraction' && r.event === 'success')
+    check(
+      successes.some((r) => r.ruleCount === cache.ruleCount),
+      `no extraction success record with the cached ${cache.ruleCount} rules: ${JSON.stringify(successes)}`,
+    )
 
     return `${result}; ${cache.ruleCount} rules cached from ${cache.files.join(', ')}`
   })
