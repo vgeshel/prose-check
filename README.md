@@ -815,6 +815,15 @@ the fixture project, whose `CLAUDE.md` imports its `AGENTS.md`:
 - the skips for a short reply, a missing API key, and a Jev timeout
   (`timeoutMs` 1);
 - the status view and its metrics after these cases;
+- the doctor command after the first reply;
+- Muse Code only, with Muse Code's `echo` provider in a project without
+  instruction files: the session-start warning when Bun is on neither the
+  `PATH` that Muse Code passes to hooks nor at `~/.bun/bin/bun`; the hooks
+  running Bun from `~/.bun/bin/bun` when it is not on that `PATH`; the
+  warnings for a missing and a rejected key, read from the session log; and
+  the doctor command's failure for the rejected key;
+- Muse Code only: a rejected key's `HTTP 401` in the metrics, the status
+  view, and the doctor command;
 - enabling the plugin for a repository with a second, new home directory
   (Claude Code and Codex);
 - updating and uninstalling.
@@ -828,7 +837,11 @@ stops before it starts when there is less, because the hooks cannot write
 their records on a full disk), `claude`, `codex`, and `muse` signed in (the suite copies
 `~/.claude/.credentials.json`, `~/.codex/auth.json`, and
 `~/.config/muse/auth.json` into its isolated homes), `TYPESAFE_API_KEY`,
-`tmux`, `git`, and `bun`. While the repository is private, the suite also
+`git`, `bun`, and, for Claude Code and Codex, `tmux`. A sign-in that a CLI
+keeps in the macOS keychain does not reach the isolated homes: when
+`~/.config/muse/auth.json` has `"storage": "keychain"`, every Muse Code step
+that needs the model fails with `missing meta credentials`, and the steps
+that use the `echo` provider still run. While the repository is private, the suite also
 copies `~/.gitconfig` and `~/.config/gh/` so Git can clone it.
 
 **Isolation:** each harness runs with its own `HOME` under the output
