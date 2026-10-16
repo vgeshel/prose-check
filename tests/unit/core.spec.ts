@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import { DEFAULT_OPTIONS, modOptions, projectOptions } from '../../core/options'
 import { projectState, stateRoot } from '../../core/paths'
-import { aggregate } from '../../core/records'
+import { aggregate, checkMetric } from '../../core/records'
 import { formatStatus } from '../../core/status'
 import { importedPaths } from '../../core/rules'
 import { hashSources, readSources, sha256Hex } from '../../core/sources'
@@ -321,6 +321,38 @@ describe('metrics', () => {
     expect(aggregate(text, 'a').current.checks).toBe(1)
     expect(aggregate('').current.averageLatencyMs).toBeUndefined()
   })
+
+  it('keeps the latest detail of each skip reason, per session and in total', () => {
+    const lines = [
+      { at: 1, session: 'a', event: 'session-start' },
+      { at: 2, session: 'a', event: 'check', outcome: 'skipped', reason: 'jev-error', detail: 'HTTP 529' },
+      { at: 3, session: 'a', event: 'check', outcome: 'skipped', reason: 'jev-error', detail: 'HTTP 401' },
+      { at: 4, session: 'b', event: 'session-start' },
+      { at: 5, session: 'b', event: 'check', outcome: 'skipped', reason: 'extraction-failed', detail: 'the extraction failed: x' },
+      { at: 6, session: 'b', event: 'check', outcome: 'skipped', reason: 'jev-error' },
+    ]
+    const metrics = aggregate(lines.map((line) => JSON.stringify(line)).join('\n'))
+    expect(metrics.total.details).toEqual({
+      'jev-error': { detail: 'HTTP 401', at: 3 },
+      'extraction-failed': { detail: 'the extraction failed: x', at: 5 },
+    })
+    expect(metrics.current.details).toEqual({
+      'extraction-failed': { detail: 'the extraction failed: x', at: 5 },
+    })
+    expect(aggregate('').total.details).toEqual({})
+  })
+
+  it('records the detail of a Jev error and a failed extraction in the metrics line, without other skips', () => {
+    expect(
+      checkMetric(7, 's', { kind: 'skipped', reason: 'jev-error', detail: 'HTTP 401', latencyMs: 90 }, 'skipped'),
+    ).toEqual({ at: 7, session: 's', event: 'check', outcome: 'skipped', reason: 'jev-error', detail: 'HTTP 401' })
+    expect(
+      checkMetric(7, 's', { kind: 'skipped', reason: 'extraction-failed', detail: 'r' }, 'skipped'),
+    ).toEqual(expect.objectContaining({ reason: 'extraction-failed', detail: 'r' }))
+    expect(
+      checkMetric(7, 's', { kind: 'skipped', reason: 'jev-error', detail: 'x'.repeat(1000) }, 'skipped'),
+    ).toEqual(expect.objectContaining({ detail: 'x'.repeat(300) }))
+  })
 })
 
 describe('status command', () => {
@@ -336,13 +368,14 @@ describe('status command', () => {
     await writeFile(join(project, 'AGENTS.md'), 'Use short sentences.')
     const state = await projectState(join(home, '.local/state/prose-check'), 'codex', resolved)
     const hash = await hashSources(await readSources(resolved, readText, 'codex'))
-    const args = { project, harness: 'codex' as const, json: true, session: undefined }
+    const args = { command: 'status' as const, project, harness: 'codex' as const, json: true, session: undefined }
 
     return { home, project, resolved, state, hash, args }
   }
 
   it('parses its command line', () => {
     expect(parseArguments(['status', 'muse', '--json', '--session', 'x'], '/cwd')).toEqual({
+      command: 'status',
       project: '/cwd',
       harness: 'muse',
       json: true,
@@ -415,7 +448,7 @@ describe('status command', () => {
     )
     let out = ''
     expect(await main(['status', 'codex'], f.project, { HOME: f.home }, (text) => (out += text))).toBe(0)
-    expect(out).toContain('prose-check 0.3.3 (codex)')
+    expect(out).toContain('prose-check 0.4.0 (codex)')
     expect(out).toContain(`Project: ${f.resolved}`)
     expect(out).toContain('This session (abc):')
     expect(out).toContain('  checks completed: 1')
@@ -449,5 +482,30 @@ describe('status command', () => {
     expect(text).toContain('Extraction: running')
     expect(text).toContain('Debug records: /s/debug.jsonl')
     expect(text).toContain('TYPESAFE_API_KEY: not set')
+  })
+
+  it('shows the latest detail next to the count of each skip reason that has one', () => {
+    const metrics = aggregate(
+      [
+        { at: 1, session: 'a', event: 'session-start' },
+        { at: 2, session: 'a', event: 'check', outcome: 'skipped', reason: 'jev-error', detail: 'HTTP 401' },
+        { at: 3, session: 'a', event: 'check', outcome: 'skipped', reason: 'jev-timeout' },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join('\n'),
+    )
+    const text = formatStatus({
+      harness: 'codex',
+      version: '1',
+      projectRoot: '/p',
+      settings: DEFAULT_OPTIONS,
+      settingsError: undefined,
+      apiKey: { isSet: true, source: 'environment' },
+      cache: { files: [], state: 'no-files', ruleCount: undefined, extracting: false, lastFailure: undefined },
+      metrics,
+      stateDir: '/s',
+      debugFile: '/s/debug.jsonl',
+    })
+    expect(text).toContain('  skips: Jev timeout 1, Jev error 1 (latest: HTTP 401)')
   })
 })

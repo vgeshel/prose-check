@@ -136,8 +136,16 @@ export type MetricLine =
       event: 'check'
       outcome: Outcome
       reason?: SkipReason
+      /** The cause of a `jev-error` or `extraction-failed` skip. */
+      detail?: string
       latencyMs?: number
     }
+
+/** The skip reasons whose metrics line records the cause. */
+const DETAILED: readonly SkipReason[] = ['jev-error', 'extraction-failed']
+
+/** The longest detail a metrics line keeps. */
+const DETAIL_LENGTH = 300
 
 /** The metrics line of one check. */
 export function checkMetric(
@@ -152,6 +160,11 @@ export function checkMetric(
     event: 'check',
     outcome,
     ...(evaluation.kind === 'skipped' ? { reason: evaluation.reason } : {}),
+    ...(evaluation.kind === 'skipped' &&
+    evaluation.detail !== undefined &&
+    DETAILED.includes(evaluation.reason)
+      ? { detail: evaluation.detail.slice(0, DETAIL_LENGTH) }
+      : {}),
     ...(evaluation.kind === 'checked'
       ? { latencyMs: evaluation.latencyMs }
       : {}),
@@ -170,6 +183,8 @@ export interface Counters {
   jevErrors: number
   /** The mean Jev latency of the answered checks, or undefined when there were none. */
   averageLatencyMs: number | undefined
+  /** The latest recorded cause of each skip reason that records one. */
+  details: Partial<Record<SkipReason, { detail: string; at: number }>>
 }
 
 /** The counts for one session and for every session. */
@@ -193,6 +208,7 @@ function emptyCounters(): Counters {
     jevTimeouts: 0,
     jevErrors: 0,
     averageLatencyMs: undefined,
+    details: {},
   }
 }
 
@@ -228,6 +244,7 @@ function parseLine(line: string): MetricLine | undefined {
     event: 'check',
     outcome,
     ...(reason === undefined ? {} : { reason }),
+    ...(typeof value.detail === 'string' ? { detail: value.detail } : {}),
     ...(typeof value.latencyMs === 'number'
       ? { latencyMs: value.latencyMs }
       : {}),
@@ -242,6 +259,8 @@ function count(lines: readonly MetricLine[]): Counters {
     if (line.event !== 'check') continue
     if (line.outcome === 'skipped') {
       if (line.reason !== undefined) counters.skips[line.reason] += 1
+      if (line.reason !== undefined && line.detail !== undefined)
+        counters.details[line.reason] = { detail: line.detail, at: line.at }
       if (line.reason === 'jev-timeout') counters.jevTimeouts += 1
       if (line.reason === 'jev-error') counters.jevErrors += 1
       continue
@@ -259,6 +278,16 @@ function count(lines: readonly MetricLine[]): Counters {
     latencyCount === 0 ? undefined : Math.round(latencyTotal / latencyCount)
 
   return counters
+}
+
+/** The time of the last session start in the metrics file, if any. */
+export function lastSessionStart(text: string): number | undefined {
+  return text
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map(parseLine)
+    .filter((line) => line?.event === 'session-start')
+    .at(-1)?.at
 }
 
 /**

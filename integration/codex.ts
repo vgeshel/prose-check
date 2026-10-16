@@ -17,6 +17,7 @@ import {
   poll,
   readLines,
   recordCount,
+  run,
   sandbox,
   stateFiles,
   statusJson,
@@ -50,6 +51,27 @@ export async function launcherStatus(
   })
 
   return { text: result.stdout, value: json ? statusJson(result.stdout) : undefined }
+}
+
+/** Runs the doctor command the README names; returns its exit status and output. */
+export async function launcherDoctor(
+  box: Sandbox,
+  harness: 'codex' | 'muse',
+): Promise<{ exitCode: number; text: string }> {
+  const { root } = await stateFiles(box)
+  const result = await run([join(root, 'bin/prose-check'), 'doctor', harness], { cwd: box.project, env: box.env })
+  await writeFile(join(box.dir, `doctor-${Date.now()}.txt`), `${result.stdout}\n${result.stderr}`)
+
+  return { exitCode: result.exitCode, text: result.stdout }
+}
+
+/** Asserts that the doctor command passes; returns its findings. */
+export async function doctorPasses(box: Sandbox, harness: 'codex' | 'muse'): Promise<string> {
+  const result = await launcherDoctor(box, harness)
+  check(result.exitCode === 0, `doctor exited ${result.exitCode}: ${result.text}`)
+  check(result.text.includes('Result: no problems found.'), `doctor output: ${result.text}`)
+
+  return result.text.split('\n').slice(2, -1).join('\n')
 }
 
 /** Waits until the status shows a current rule cache; asserts the extraction records. */
@@ -165,6 +187,8 @@ export async function codex(runDir: string, steps: Steps): Promise<void> {
   })
 
   await steps.step('extract the rules from AGENTS.md only', () => extracted(box, 'codex', 0))
+
+  await steps.step('pass every doctor check after the first session', () => doctorPasses(box, 'codex'))
 
   await steps.step('pass a reply that follows the rules', async () => {
     const from = await recordCount(box)

@@ -1,5 +1,9 @@
 #!/bin/sh
-# The status command, run from a checkout of this repository.
+# The status and doctor commands, run from a checkout of this repository.
 # Usage: bin/prose-check status codex|muse [--json] [--session ID]
+#        bin/prose-check doctor codex|muse [--json]
 project="$PWD"
-cd "$(dirname "$0")/.." && exec bun --no-env-file adapters/status.ts --project "$project" "$@"
+bun="$(command -v bun 2>/dev/null)"
+if [ -z "$bun" ] && [ -x "$HOME/.bun/bin/bun" ]; then bun="$HOME/.bun/bin/bun"; fi
+[ -n "$bun" ] || { echo "prose-check: Bun was not found on PATH or at ~/.bun/bin/bun. Install Bun from https://bun.com." >&2; exit 1; }
+cd "$(dirname "$0")/.." && exec "$bun" --no-env-file adapters/status.ts --project "$project" "$@"

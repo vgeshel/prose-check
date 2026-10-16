@@ -2,7 +2,10 @@
  * Process environment access for the Codex and Muse Code adapters, and the
  * `.env.local` fallback for `TYPESAFE_API_KEY`.
  */
+import type { KeySource } from '../core/key'
 import { readText } from './files'
+
+export type { KeySource } from '../core/key'
 
 /** The process environment as a plain record of defined strings. */
 export function processEnvironment(): Record<string, string> {
@@ -41,9 +44,6 @@ export function dotenvValue(text: string, name: string): string | undefined {
 
   return found
 }
-
-/** Where the adapters found the API key. */
-export type KeySource = 'environment' | '.env.local'
 
 /**
  * `TYPESAFE_API_KEY` from the process environment, or else from the project

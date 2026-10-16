@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,6 +11,7 @@ import { processEnvironment } from '../../adapters/environment'
 import { SCRATCH_MARKER, runExtraction } from '../../adapters/extraction'
 import { readText, writeText } from '../../adapters/files'
 import { LEASE_MS, extract, jev, leaseFile } from '../../adapters/runtime'
+import { LAUNCHER } from '../../adapters/command'
 
 const PLUGIN = join(import.meta.dir, '../..')
 const directories: string[] = []
@@ -253,18 +254,17 @@ describe('hook command boundary', () => {
     }
 
     expect(await hook('muse', project, 'invalid JSON', env)).toBe('{}\n')
-    expect(
-      await hook(
-        'muse',
-        join(project, 'sub'),
-        JSON.stringify({
-          hook_event_name: 'SessionStart',
-          cwd: join(project, 'sub'),
-          session_id: 'fixture-session',
-        }),
-        env,
-      ),
-    ).toBe('{}\n')
+    const started = await hook(
+      'muse',
+      join(project, 'sub'),
+      JSON.stringify({
+        hook_event_name: 'SessionStart',
+        cwd: join(project, 'sub'),
+        session_id: 'fixture-session',
+      }),
+      env,
+    )
+    expect(JSON.parse(started).systemMessage).toContain('TYPESAFE_API_KEY is not set')
 
     const resolved = Bun.spawnSync(['git', 'rev-parse', '--show-toplevel'], { cwd: project })
       .stdout.toString()
@@ -291,6 +291,15 @@ describe('hook command boundary', () => {
       }),
     )
 
+    const doctor = Bun.spawnSync([launcher, 'doctor', 'muse', '--json'], {
+      cwd: join(project, 'sub'),
+      env,
+    })
+    expect(doctor.exitCode).toBe(1)
+    expect(JSON.parse(doctor.stdout.toString())).toEqual(
+      expect.objectContaining({ harness: 'muse', projectRoot: resolved, ok: false }),
+    )
+
     expect(
       await hook(
         'muse',
@@ -306,6 +315,30 @@ describe('hook command boundary', () => {
         env,
       ),
     ).toBe('{}\n')
+  })
+
+  it('runs the Claude Code doctor through claude -p, and explains a harness whose hooks never ran', async () => {
+    const root = await temporary()
+    const bin = join(root, 'bin')
+    await mkdir(bin)
+    await writeFile(join(bin, 'claude'), '#!/bin/sh\nprintf "%s|" "$@"\nexit 3\n')
+    await chmod(join(bin, 'claude'), 0o755)
+    const launcher = join(root, '.local/state/prose-check/bin/prose-check')
+    await writeText(launcher, LAUNCHER)
+    await chmod(launcher, 0o755)
+    const env = { HOME: root, PATH: `${bin}:/usr/bin:/bin` }
+
+    const claude = Bun.spawnSync([launcher, 'doctor', 'claude', '--json'], { cwd: root, env })
+    expect(claude.stdout.toString()).toBe('-p|/prose-check doctor --json|')
+    expect(claude.exitCode).toBe(3)
+
+    const codex = Bun.spawnSync([launcher, 'doctor', 'codex'], { cwd: root, env })
+    expect(codex.exitCode).toBe(1)
+    expect(codex.stderr.toString()).toContain('the prose-check hooks have not run in a codex session on this machine')
+
+    const usage = Bun.spawnSync([launcher, 'status', 'claude'], { cwd: root, env })
+    expect(usage.exitCode).toBe(2)
+    expect(usage.stderr.toString()).toContain('prose-check doctor claude|codex|muse')
   })
 
   it('does nothing in an extraction scratch directory', async () => {
@@ -324,15 +357,42 @@ describe('hook command boundary', () => {
     expect(await readText(join(home, '.local/state/prose-check/codex/plugin-root'))).toBeUndefined()
   })
 
-  it('prints an empty result when Bun is not on PATH', async () => {
-    const root = await temporary()
-    const child = Bun.spawn(['/bin/sh', join(PLUGIN, 'hooks/codex.sh')], {
-      cwd: root,
-      env: { PATH: '/usr/bin:/bin', HOME: root },
-      stdin: new TextEncoder().encode('{}'),
+  async function launch(
+    script: string,
+    cwd: string,
+    env: Record<string, string>,
+    event: Record<string, unknown>,
+  ): Promise<string> {
+    const child = Bun.spawn(['/bin/sh', join(PLUGIN, script)], {
+      cwd,
+      env,
+      stdin: new TextEncoder().encode(JSON.stringify(event)),
       stdout: 'pipe',
     })
-    expect(await new Response(child.stdout).text()).toBe('{}\n')
+
+    return new Response(child.stdout).text()
+  }
+
+  it('without Bun, lets a Stop finish unchecked and shows a message at session start', async () => {
+    const root = await temporary()
+    const env = { PATH: '/usr/bin:/bin', HOME: root }
+    const stop = { hook_event_name: 'Stop', cwd: root, session_id: 's' }
+    const start = { hook_event_name: 'SessionStart', cwd: root, session_id: 's' }
+    for (const script of ['hooks/codex.sh', 'hooks/muse.sh', 'hooks/muse-start.sh']) {
+      expect(await launch(script, root, env, stop)).toBe('{}\n')
+      const message = JSON.parse(await launch(script, root, env, start)) as { systemMessage?: string }
+      expect(message.systemMessage).toContain('Bun was not found on PATH or at ~/.bun/bin/bun')
+    }
+  })
+
+  it('runs Bun from ~/.bun/bin when it is not on PATH', async () => {
+    const root = await temporary()
+    await mkdir(join(root, '.bun/bin'), { recursive: true })
+    await symlink(process.execPath, join(root, '.bun/bin/bun'))
+    const env = { PATH: '/usr/bin:/bin', HOME: root }
+    const start = { hook_event_name: 'SessionStart', cwd: root, session_id: 's' }
+    const message = JSON.parse(await launch('hooks/codex.sh', root, env, start)) as { systemMessage?: string }
+    expect(message.systemMessage).toContain('TYPESAFE_API_KEY is not set')
   })
 })
 
@@ -426,7 +486,7 @@ describe('Jev request', () => {
         body: '{"q":1}',
       })
       expect(await jev('{}', 2000, 'k', `${base}/busy`)).toEqual(
-        expect.objectContaining({ kind: 'error', detail: 'HTTP 529' }),
+        expect.objectContaining({ kind: 'error', detail: 'HTTP 529', status: 529 }),
       )
       const slow = await jev('{}', 50, 'k', `${base}/slow`)
       expect(slow.kind).toBe('timeout')
@@ -439,5 +499,6 @@ describe('Jev request', () => {
     expect(refused).toEqual(
       expect.objectContaining({ kind: 'error', detail: expect.stringMatching(/^request failed: /) }),
     )
+    expect('status' in refused).toBe(false)
   })
 })

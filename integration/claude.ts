@@ -182,6 +182,15 @@ export async function claude(runDir: string, steps: Steps): Promise<void> {
     return `${result}; ${cache.ruleCount} rules cached from ${cache.files.join(', ')}`
   })
 
+  await steps.step('pass every doctor check', async () => {
+    const result = await run(['claude', '-p', '/prose-check doctor'], { cwd: box.project, env: box.env, timeoutMs: 120_000 })
+    await writeFile(join(box.dir, 'doctor.txt'), `${result.stdout}\n${result.stderr}`)
+    check(result.exitCode === 0, `doctor exited ${result.exitCode}: ${result.stdout}`)
+    check(result.stdout.includes('Result: no problems found.'), `doctor output: ${result.stdout}`)
+
+    return result.stdout.split('\n').slice(2, -1).join('\n')
+  })
+
   await steps.step('pass a reply that follows the rules', async () => {
     const from = await recordCount(box)
     await prompt(box, PROMPTS.plain, 'pass')

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "prose-check",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Checks Muse's final reply against the project's writing rules with TypeSafe Jev.",
   "compat": { "source": "native", "manifestDir": ".muse-plugin" },
   "capabilities": {

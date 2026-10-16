@@ -63,7 +63,9 @@ async function preflight(harnesses: readonly Harness[], out: string): Promise<vo
       `only ${Math.floor(free / 1024 ** 2)} MB is free under ${out}; the run needs ${needed / 1024 ** 2} MB`,
     )
   if ((process.env.TYPESAFE_API_KEY ?? '') === '') missing.push('TYPESAFE_API_KEY is not set')
-  for (const command of ['git', 'tmux', 'bun', ...harnesses]) {
+  // The Claude Code and Codex flows drive an interactive terminal; Muse Code's does not.
+  const terminal = harnesses.some((harness) => harness !== 'muse') ? ['tmux'] : []
+  for (const command of ['git', ...terminal, 'bun', ...harnesses]) {
     const found = await run(['sh', '-c', `command -v ${command}`], { env: { PATH: process.env.PATH ?? '' } })
     if (found.exitCode !== 0) missing.push(`${command} is not on PATH`)
   }

@@ -43,7 +43,8 @@ export type RulesLookup =
 export type JevAnswer =
   | { kind: 'answered'; body: string; latencyMs: number }
   | { kind: 'timeout'; latencyMs: number }
-  | { kind: 'error'; detail: string; latencyMs: number }
+  /** `status` is the HTTP status of a non-2xx answer; a failed request has none. */
+  | { kind: 'error'; detail: string; status?: number; latencyMs: number }
 
 /** The result of one check. */
 export type Evaluation =
