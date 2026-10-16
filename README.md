@@ -873,23 +873,25 @@ copies `~/.gitconfig` and `~/.config/gh/` so Git can clone it.
 
 **Isolation:** each harness runs with its own `HOME` under the output
 directory and an environment that holds only `HOME`, `PATH`, `TERM`, `USER`,
-`SHELL`, and `LANG`. Besides the sign-in files, the suite copies the
+`SHELL`, `LANG`, and the sign-in variable described below. Besides the sign-in files, the suite copies the
 onboarding and account fields of `~/.claude.json` and
 `~/.config/muse/settings.json`. It never changes your own CLI configuration.
 
 On macOS, Claude Code and Muse Code can keep their sign-in in the login
 keychain instead of a file: Claude Code when `~/.claude/.credentials.json`
 does not exist, Muse Code when `~/.config/muse/auth.json` says
-`"storage": "keychain"`. A CLI finds the login keychain through
-`$HOME/Library/Keychains`, so an isolated home has none. For such a sign-in
-the suite links `~/Library/Keychains` into that harness's sandbox home, and
-removes the link when the run ends. While the run lasts, the CLIs in the
-sandbox can read and update every item in your login keychain, as they can
-outside the suite; a CLI that refreshes its token updates your own sign-in.
-A copy of the single sign-in item in a separate keychain did not work:
-Claude Code 2.1.301 reported `Not logged in`. On other systems, a Muse Code
-`auth.json` that says `"storage": "keychain"` stops the Muse Code flow at
-setup.
+`"storage": "keychain"`. The suite does not share that sign-in with its
+sandboxes: when a sandboxed Claude Code refreshed a shared token, the
+developer's own Claude Code sign-in stopped working. Give the suite a
+credential of its own instead:
+
+- Claude Code: run `claude setup-token` and export the token it prints as
+  `CLAUDE_CODE_OAUTH_TOKEN`.
+- Muse Code: export a Meta API key as `META_API_KEY`.
+
+The suite passes `CLAUDE_CODE_OAUTH_TOKEN` only to the Claude Code sandboxes
+and `META_API_KEY` only to the Muse Code sandbox, and stops at setup when a
+keychain sign-in has no such variable.
 
 **Cost per run**, measured on 2026-10-08 at version 0.3.0 with every case
 passing on its first attempt:

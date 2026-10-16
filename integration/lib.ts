@@ -3,7 +3,7 @@
  * a terminal driver on a private tmux socket, the plugin's state files, and
  * the step report.
  */
-import { copyFile, cp, lstat, mkdir, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -56,36 +56,23 @@ async function copyHomeFile(home: string, path: string): Promise<boolean> {
 }
 
 /**
- * Gives the sandbox home the developer's macOS keychains, for a CLI that keeps
- * its sign-in there. The Security framework finds the login keychain through
- * `$HOME/Library/Keychains`, so a fresh home has none; the link makes the
- * sign-in usable without writing it to disk.
+ * Sign-in variables the suite passes into a harness's sandbox when they are
+ * set: a credential made for this use, never the developer's interactive
+ * sign-in. A keychain sign-in cannot be shared with a sandbox safely: when a
+ * sandboxed Claude Code refreshes a shared token, the developer's own Claude
+ * Code sign-in stops working.
  */
-async function linkKeychains(home: string): Promise<boolean> {
-  const source = join(REAL_HOME, 'Library/Keychains')
-  if (process.platform !== 'darwin' || !existsSync(source)) return false
-  const target = join(home, 'Library/Keychains')
-  if (existsSync(target)) return true
-  await mkdir(dirname(target), { recursive: true })
-  await symlink(source, target)
-
-  return true
+const SIGN_IN_VARIABLES: Readonly<Partial<Record<Harness, string>>> = {
+  claude: 'CLAUDE_CODE_OAUTH_TOKEN',
+  muse: 'META_API_KEY',
 }
 
-/** Removes the link that `linkKeychains` made in `home`, if any. */
-export async function unlinkKeychains(home: string): Promise<void> {
-  const target = join(home, 'Library/Keychains')
-  const metadata = await lstat(target).catch(() => undefined)
-  if (metadata?.isSymbolicLink() === true) await unlink(target)
-}
+/** The sign-in variable for `harness`, when the developer set it. */
+function signIn(harness: Harness): Record<string, string> {
+  const name = SIGN_IN_VARIABLES[harness]
+  const value = name === undefined ? undefined : process.env[name]
 
-/** Whether the login keychain holds a generic password for `service`. */
-function inKeychain(service: string): boolean {
-  return (
-    process.platform === 'darwin' &&
-    Bun.spawnSync(['security', 'find-generic-password', '-s', service], { stdout: 'ignore', stderr: 'ignore' })
-      .exitCode === 0
-  )
+  return name === undefined || value === undefined || value === '' ? {} : { [name]: value }
 }
 
 /**
@@ -110,11 +97,9 @@ export async function sandbox(
   await copyHomeFile(home, '.config/gh/hosts.yml')
   await copyHomeFile(home, '.config/gh/config.yml')
   if (harness === 'claude') {
-    // Claude Code keeps its sign-in in ~/.claude/.credentials.json, or on macOS in the keychain.
-    const copied = await copyHomeFile(home, '.claude/.credentials.json')
-    if (!copied && !(inKeychain('Claude Code-credentials') && (await linkKeychains(home))))
+    if (!(await copyHomeFile(home, '.claude/.credentials.json')) && !process.env.CLAUDE_CODE_OAUTH_TOKEN)
       throw new Error(
-        'Claude Code is not signed in: ~/.claude/.credentials.json is missing and the keychain has no "Claude Code-credentials"',
+        'Claude Code is not signed in for the suite: ~/.claude/.credentials.json is missing. Where Claude Code keeps its sign-in in the macOS keychain, run `claude setup-token` and export CLAUDE_CODE_OAUTH_TOKEN.',
       )
     const config = JSON.parse(await readFile(join(REAL_HOME, '.claude.json'), 'utf8')) as Record<string, unknown>
     const kept = ['hasCompletedOnboarding', 'lastOnboardingVersion', 'oauthAccount', 'userID']
@@ -133,8 +118,10 @@ export async function sandbox(
     const auth = JSON.parse(await readFile(join(home, '.config/muse/auth.json'), 'utf8')) as {
       providers?: Record<string, { storage?: string }>
     }
-    if (Object.values(auth.providers ?? {}).some((provider) => provider.storage === 'keychain'))
-      check(await linkKeychains(home), 'Muse Code keeps its sign-in in a keychain this machine does not have')
+    if (Object.values(auth.providers ?? {}).some((provider) => provider.storage === 'keychain') && !process.env.META_API_KEY)
+      throw new Error(
+        'Muse Code keeps its sign-in in the macOS keychain, which the suite does not share; export META_API_KEY for the suite.',
+      )
   }
   for (const file of ['CLAUDE.md', 'AGENTS.md'])
     await copyFile(join(FIXTURE, file), join(project, file))
@@ -153,6 +140,7 @@ export async function sandbox(
       USER: process.env.USER ?? 'tester',
       SHELL: '/bin/bash',
       LANG: 'C.UTF-8',
+      ...signIn(harness),
     },
   }
 }

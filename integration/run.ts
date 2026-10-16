@@ -11,14 +11,14 @@
  * It exits 1 when any step fails.
  */
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, statfs, writeFile } from 'node:fs/promises'
+import { mkdir, statfs, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import type { Harness } from '../core/paths'
 import { claude } from './claude'
 import { codex } from './codex'
 import type { StepResult } from './lib'
-import { REF, SOURCE, StepFailure, Steps, Terminal, checks, readLines, run, unlinkKeychains } from './lib'
+import { REF, SOURCE, StepFailure, Steps, Terminal, checks, readLines, run } from './lib'
 import { muse } from './muse'
 
 const FLOWS: Record<Harness, (runDir: string, steps: Steps) => Promise<void>> = { claude, codex, muse }
@@ -145,9 +145,6 @@ await Promise.all(
   }),
 )
 await run(['tmux', '-L', Terminal.SOCKET, 'kill-server'], { env: { PATH: process.env.PATH ?? '' } })
-// Remove the links to the developer's keychains that `sandbox` made.
-for (const entry of await readdir(out, { withFileTypes: true }))
-  if (entry.isDirectory()) await unlinkKeychains(join(out, entry.name, 'home'))
 
 const results = all.flatMap((steps) => steps.results)
 const costs = await Promise.all(harnesses.map((harness) => cost(out, harness)))
