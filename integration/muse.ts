@@ -9,7 +9,7 @@ import type { Sandbox, Steps } from './lib'
 import {
   PROMPTS,
   firstChecked,
-  SOURCE,
+  marketplaceSource,
   check,
   must,
   newRecords,
@@ -119,7 +119,7 @@ export async function muse(runDir: string, steps: Steps): Promise<void> {
   const box = await sandbox(runDir, 'muse')
 
   await steps.step('install from the marketplace and approve the hooks', async () => {
-    await must(['muse', 'plugins', 'marketplace', 'add', 'prose-check', SOURCE], { env: box.env, cwd: box.dir })
+    await must(['muse', 'plugins', 'marketplace', 'add', 'prose-check', marketplaceSource('muse')], { env: box.env, cwd: box.dir })
     const inspected = await install(box)
     await envLocal(box, true)
     await projectSettings(box, OPTIONS)

@@ -6,7 +6,9 @@ import type { Line, Sandbox, Steps } from './lib'
 import {
   PROMPTS,
   firstChecked,
+  REF,
   SOURCE,
+  marketplaceSource,
   Terminal,
   check,
   checks,
@@ -148,7 +150,7 @@ export async function claude(runDir: string, steps: Steps): Promise<void> {
   const box = await sandbox(runDir, 'claude')
 
   await steps.step('install from the marketplace and confirm the mod loads', async () => {
-    await must(['claude', 'plugin', 'marketplace', 'add', SOURCE], { env: box.env, cwd: box.project })
+    await must(['claude', 'plugin', 'marketplace', 'add', marketplaceSource('claude')], { env: box.env, cwd: box.project })
     await must(['claude', 'plugin', 'install', PLUGIN], { env: box.env, cwd: box.project })
     await settings(box, OPTIONS)
     const log = join(box.dir, 'loaded.debug.log')
@@ -293,7 +295,9 @@ export async function claude(runDir: string, steps: Steps): Promise<void> {
     const team = await sandbox(runDir, 'claude', 'claude-team')
     await mkdir(join(team.project, '.claude'), { recursive: true })
     await writeJson(join(team.project, '.claude/settings.json'), {
-      extraKnownMarketplaces: { 'prose-check': { source: { source: 'github', repo: SOURCE } } },
+      extraKnownMarketplaces: {
+        'prose-check': { source: { source: 'github', repo: SOURCE, ...(REF === '' ? {} : { ref: REF }) } },
+      },
       enabledPlugins: { [PLUGIN]: true },
     })
     await writeJson(join(team.home, '.claude/settings.json'), { env: { TYPESAFE_API_KEY: team.key } })

@@ -12,7 +12,7 @@ if [ -z "$bun" ]; then
   # Read the whole event before matching, so the harness never writes to a closed pipe.
   event="$(cat)"
   if printf '%s' "$event" | grep -Eq '"hook_event_name"[[:space:]]*:[[:space:]]*"SessionStart"'; then
-    printf '%s\n' '{"systemMessage":"prose-check: Bun was not found on PATH or at ~/.bun/bin/bun, so every reply finishes unchecked. Install Bun from https://bun.com, then start a new session."}'
+    printf '%s\n' '{"systemMessage":"prose-check: Bun was not found on PATH or at ~/.bun/bin/bun, so replies go unchecked. Install Bun from https://bun.com, then start a new session."}'
   else
     printf '{}\n'
   fi

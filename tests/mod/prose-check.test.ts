@@ -944,8 +944,9 @@ describe('key warning at session start', () => {
     const seen = world(on, [], { env: { HOME } })
     await warm($, seen)
     expect(seen.logs).toHaveLength(1)
-    expect(seen.logs[0]).toContain('TYPESAFE_API_KEY is not set')
-    expect(seen.logs[0]).toContain('~/.claude/settings.json')
+    expect(seen.logs[0]).toBe(
+      'TYPESAFE_API_KEY is not set, so replies go unchecked. Run /prose-check doctor for the fix.',
+    )
     expect(seen.probes).toBe(0)
   })
 

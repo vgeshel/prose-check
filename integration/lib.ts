@@ -3,7 +3,7 @@
  * a terminal driver on a private tmux socket, the plugin's state files, and
  * the step report.
  */
-import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -13,6 +13,20 @@ import { projectState, stateRoot } from '../core/paths'
 
 /** The repository the suite installs the plugin from, as the README names it. */
 export const SOURCE = process.env.PROSE_CHECK_SOURCE ?? 'vgeshel/prose-check'
+
+/** The Git branch or tag to install instead of the default branch, if any. */
+export const REF = process.env.PROSE_CHECK_REF ?? ''
+
+/**
+ * The marketplace source argument for `harness`: `SOURCE`, with `REF` in the
+ * syntax each CLI accepts. Claude Code and Muse Code take `owner/repo#ref`,
+ * Codex takes `owner/repo@ref`.
+ */
+export function marketplaceSource(harness: Harness): string {
+  if (REF === '') return SOURCE
+
+  return `${SOURCE}${harness === 'codex' ? '@' : '#'}${REF}`
+}
 
 /** The fixture project's instruction files. */
 export const FIXTURE = join(import.meta.dir, 'fixture')
@@ -42,6 +56,32 @@ async function copyHomeFile(home: string, path: string): Promise<boolean> {
 }
 
 /**
+ * Gives the sandbox home the developer's macOS keychains, for a CLI that keeps
+ * its sign-in there. The Security framework finds the login keychain through
+ * `$HOME/Library/Keychains`, so a fresh home has none; the link makes the
+ * sign-in usable without writing it to disk.
+ */
+async function linkKeychains(home: string): Promise<boolean> {
+  const source = join(REAL_HOME, 'Library/Keychains')
+  if (process.platform !== 'darwin' || !existsSync(source)) return false
+  const target = join(home, 'Library/Keychains')
+  if (existsSync(target)) return true
+  await mkdir(dirname(target), { recursive: true })
+  await symlink(source, target)
+
+  return true
+}
+
+/** Whether the login keychain holds a generic password for `service`. */
+function inKeychain(service: string): boolean {
+  return (
+    process.platform === 'darwin' &&
+    Bun.spawnSync(['security', 'find-generic-password', '-s', service], { stdout: 'ignore', stderr: 'ignore' })
+      .exitCode === 0
+  )
+}
+
+/**
  * Creates a sandbox: a fresh home holding only the harness's sign-in
  * credentials and Git's credential configuration, and a Git project with the
  * fixture `CLAUDE.md` and `AGENTS.md`. The developer's own configuration is
@@ -63,8 +103,12 @@ export async function sandbox(
   await copyHomeFile(home, '.config/gh/hosts.yml')
   await copyHomeFile(home, '.config/gh/config.yml')
   if (harness === 'claude') {
-    if (!(await copyHomeFile(home, '.claude/.credentials.json')))
-      throw new Error('Claude Code is not signed in: ~/.claude/.credentials.json is missing')
+    // Claude Code keeps its sign-in in ~/.claude/.credentials.json, or on macOS in the keychain.
+    const copied = await copyHomeFile(home, '.claude/.credentials.json')
+    if (!copied && !(inKeychain('Claude Code-credentials') && (await linkKeychains(home))))
+      throw new Error(
+        'Claude Code is not signed in: ~/.claude/.credentials.json is missing and the keychain has no "Claude Code-credentials"',
+      )
     const config = JSON.parse(await readFile(join(REAL_HOME, '.claude.json'), 'utf8')) as Record<string, unknown>
     const kept = ['hasCompletedOnboarding', 'lastOnboardingVersion', 'oauthAccount', 'userID']
     await writeFile(
@@ -78,6 +122,12 @@ export async function sandbox(
     if (!(await copyHomeFile(home, '.config/muse/auth.json')))
       throw new Error('Muse Code is not signed in: ~/.config/muse/auth.json is missing')
     await copyHomeFile(home, '.config/muse/settings.json')
+    // auth.json names "storage": "keychain" for a sign-in kept in the macOS keychain.
+    const auth = JSON.parse(await readFile(join(home, '.config/muse/auth.json'), 'utf8')) as {
+      providers?: Record<string, { storage?: string }>
+    }
+    if (Object.values(auth.providers ?? {}).some((provider) => provider.storage === 'keychain'))
+      check(await linkKeychains(home), 'Muse Code keeps its sign-in in a keychain this machine does not have')
   }
   for (const file of ['CLAUDE.md', 'AGENTS.md'])
     await copyFile(join(FIXTURE, file), join(project, file))

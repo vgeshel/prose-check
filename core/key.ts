@@ -135,21 +135,19 @@ export async function recordKeyCheck(
 }
 
 /**
- * The warning for a key that Jev rejected with `status`. Claude Code shows a
- * plugin's transcript line under the plugin's name; the command adapters add
- * the `prose-check:` prefix themselves.
+ * The warning for a key that Jev rejected with `status`. It names the problem
+ * and the doctor command first, because Muse Code shows it on one footer line
+ * that cuts off the rest; the doctor prints the full fix. Claude Code shows a
+ * plugin's transcript line under the plugin's name, so the command adapters
+ * add the `prose-check:` prefix themselves.
  */
-export function rejectedKeyWarning(
-  status: number,
-  source: KeySource,
-  harness: Harness,
-): string {
-  return `Jev rejected TYPESAFE_API_KEY with HTTP ${status}, so every reply finishes unchecked. The key comes from ${source === 'environment' ? 'the environment' : '.env.local'}. Replace it with a valid TypeSafe API key. ${KEY_LOCATIONS[harness]}. Then run ${DOCTOR_COMMANDS[harness]} to confirm.`
+export function rejectedKeyWarning(status: number, harness: Harness): string {
+  return `Jev rejected TYPESAFE_API_KEY with HTTP ${status}, so replies go unchecked. Run ${DOCTOR_COMMANDS[harness]} for the fix.`
 }
 
 /** The warning for a missing key. */
 export function missingKeyWarning(harness: Harness): string {
-  return `TYPESAFE_API_KEY is not set, so every reply finishes unchecked. ${KEY_LOCATIONS[harness]}. Then run ${DOCTOR_COMMANDS[harness]} to confirm.`
+  return `TYPESAFE_API_KEY is not set, so replies go unchecked. Run ${DOCTOR_COMMANDS[harness]} for the fix.`
 }
 
 /**
@@ -178,7 +176,7 @@ export async function sessionKeyWarning(
   await recordKeyCheck(key.key, stateRoot, check, deps)
 
   return check.kind === 'rejected'
-    ? rejectedKeyWarning(check.status, key.source, harness)
+    ? rejectedKeyWarning(check.status, harness)
     : undefined
 }
 

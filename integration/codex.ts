@@ -8,7 +8,7 @@ import type { Line, Sandbox, Steps } from './lib'
 import {
   PROMPTS,
   firstChecked,
-  SOURCE,
+  marketplaceSource,
   Terminal,
   check,
   checks,
@@ -139,7 +139,7 @@ async function exec(box: Sandbox, text: string, log: string): Promise<string> {
 
 /** Installs from the marketplace and trusts the hooks through `/hooks`, as the README says. */
 async function install(box: Sandbox, name: string): Promise<string> {
-  await must(['codex', 'plugin', 'marketplace', 'add', SOURCE], { env: box.env, cwd: box.project })
+  await must(['codex', 'plugin', 'marketplace', 'add', marketplaceSource('codex')], { env: box.env, cwd: box.project })
   await must(['codex', 'plugin', 'add', PLUGIN], { env: box.env, cwd: box.project })
   const terminal = await Terminal.start(name, box.project, ['codex'], box.env, join(box.dir, `${name}.screen.txt`))
   try {

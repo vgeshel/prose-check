@@ -554,8 +554,9 @@ describe('session start key warning', () => {
     const w = await world()
     w.setAnswer({ kind: 'error', detail: 'HTTP 401', status: 401, latencyMs: 80 })
     const result = await checkHook(start, context(w, { harness: 'muse' }), w.deps)
-    expect(result.systemMessage).toContain('Jev rejected TYPESAFE_API_KEY with HTTP 401')
-    expect(result.systemMessage).toContain('.env.local')
+    expect(result.systemMessage).toBe(
+      'prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401, so replies go unchecked. Run ~/.local/state/prose-check/bin/prose-check doctor muse for the fix.',
+    )
     expect(w.jobs).toHaveLength(1)
   })
 

@@ -83,10 +83,14 @@ Claude Code passes that block to the plugin's environment in every session:
 A `TYPESAFE_API_KEY` exported in the shell that starts Claude Code works too.
 
 When the key is missing, or Jev rejects it with HTTP 401 or 403, the plugin
-adds a line to the transcript when the session starts, such as
-`prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401, so every reply
-finishes unchecked. ...`. `claude -p` does not show that line; run
-`claude -p "/prose-check doctor"` instead.
+adds a line to the transcript when the session starts:
+
+```text
+prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401, so replies go unchecked. Run /prose-check doctor for the fix.
+```
+
+`claude -p` does not show that line; run `claude -p "/prose-check doctor"`
+instead.
 
 ### Enable it for everyone who works in a repository
 
@@ -655,8 +659,9 @@ to hooks.
 ### Warnings at session start
 
 When a session starts, each harness's hook tests the key: a missing key, or
-a key that Jev rejects with HTTP 401 or 403, produces a warning that names the
-fix. The plugin caches an accepted verdict per key (see
+a key that Jev rejects with HTTP 401 or 403, produces a one-line warning that
+names the problem and the doctor command, which prints the fix. Each harness
+section's "Check the setup" says where the warning appears. The plugin caches an accepted verdict per key (see
 [State directory](#state-directory)), so a working key costs one request the
 first time it is used and none after that. A rejected key is tested again at
 each session start until it works. A check that gets HTTP 401 or 403 from Jev

@@ -18,7 +18,7 @@ import type { Harness } from '../core/paths'
 import { claude } from './claude'
 import { codex } from './codex'
 import type { StepResult } from './lib'
-import { SOURCE, StepFailure, Steps, Terminal, checks, readLines, run } from './lib'
+import { REF, SOURCE, StepFailure, Steps, Terminal, checks, readLines, run } from './lib'
 import { muse } from './muse'
 
 const FLOWS: Record<Harness, (runDir: string, steps: Steps) => Promise<void>> = { claude, codex, muse }
@@ -124,7 +124,7 @@ function report(results: readonly StepResult[], costs: readonly string[], source
 const { harnesses, out } = parse(process.argv.slice(2))
 await preflight(harnesses, out)
 await mkdir(out, { recursive: true })
-console.log(`Installing from ${SOURCE}. Output: ${out}`)
+console.log(`Installing from ${SOURCE}${REF === '' ? '' : ` at ${REF}`}. Output: ${out}`)
 
 const all = harnesses.map((harness) => new Steps(harness))
 await Promise.all(
@@ -151,7 +151,7 @@ if (harnesses.some((harness) => harness !== 'muse'))
 
 const results = all.flatMap((steps) => steps.results)
 const costs = await Promise.all(harnesses.map((harness) => cost(out, harness)))
-const text = report(results, costs, SOURCE)
+const text = report(results, costs, REF === '' ? SOURCE : `${SOURCE} at ${REF}`)
 await writeFile(join(out, 'report.md'), text)
 const failed = results.filter((r) => !r.passed).length
 console.log(`\n${results.length - failed} of ${results.length} steps passed.`)

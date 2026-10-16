@@ -72,16 +72,22 @@ describe('key check', () => {
 })
 
 describe('session start key warning', () => {
-  it('warns about a missing key without a request, and says where each harness reads it', async () => {
+  it('warns about a missing key without a request, and names the doctor command', async () => {
     const d = deps([])
-    const claude = await sessionKeyWarning(undefined, ROOT, 'claude', d.deps)
-    expect(claude).toContain('TYPESAFE_API_KEY is not set')
-    expect(claude).toContain('~/.claude/settings.json')
-    expect(claude).toContain('/prose-check doctor')
-    const muse = await sessionKeyWarning(undefined, ROOT, 'muse', d.deps)
-    expect(muse).toContain('.env.local')
-    expect(muse).toContain('prose-check doctor muse')
+    expect(await sessionKeyWarning(undefined, ROOT, 'claude', d.deps)).toBe(
+      'TYPESAFE_API_KEY is not set, so replies go unchecked. Run /prose-check doctor for the fix.',
+    )
+    expect(await sessionKeyWarning(undefined, ROOT, 'muse', d.deps)).toBe(
+      'TYPESAFE_API_KEY is not set, so replies go unchecked. Run ~/.local/state/prose-check/bin/prose-check doctor muse for the fix.',
+    )
     expect(d.probes).toEqual([])
+  })
+
+  it('keeps the warning short enough for a 200-column Muse Code footer', async () => {
+    const d = deps([unauthorized])
+    const text = await sessionKeyWarning({ key: 'k', source: '.env.local' }, ROOT, 'muse', d.deps)
+    // Muse Code 1.4.9 draws `Hook · SessionStart · prose-check: <text>` after the model name.
+    expect(`  echo Hook · SessionStart · prose-check: ${text ?? ''}`.length).toBeLessThanOrEqual(200)
   })
 
   it('probes a new key once, caches an accepted verdict, and then sends nothing', async () => {
@@ -96,11 +102,12 @@ describe('session start key warning', () => {
     expect([...d.files.values()].join('')).not.toContain('"k"')
   })
 
-  it('warns when Jev rejects the key, names its source, and probes again at the next session', async () => {
+  it('warns when Jev rejects the key, and probes again at the next session', async () => {
     const d = deps([unauthorized, unauthorized])
     const text = await sessionKeyWarning({ key: 'k', source: '.env.local' }, ROOT, 'muse', d.deps)
-    expect(text).toContain('Jev rejected TYPESAFE_API_KEY with HTTP 401')
-    expect(text).toContain('.env.local')
+    expect(text).toBe(
+      'Jev rejected TYPESAFE_API_KEY with HTTP 401, so replies go unchecked. Run ~/.local/state/prose-check/bin/prose-check doctor muse for the fix.',
+    )
     expect(await sessionKeyWarning({ key: 'k', source: '.env.local' }, ROOT, 'muse', d.deps)).toContain('HTTP 401')
     expect(d.probes).toHaveLength(2)
   })
