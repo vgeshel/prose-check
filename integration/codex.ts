@@ -192,6 +192,7 @@ export async function codex(runDir: string, steps: Steps): Promise<void> {
 
   await steps.step('show a rejected key at session start in the transcript, and fail the doctor', async () => {
     await writeFile(join(box.project, '.env.local'), 'TYPESAFE_API_KEY=fixt123\n')
+    const from = await recordCount(box)
     const terminal = await Terminal.start('codex-key', box.project, ['codex'], box.env, join(box.dir, 'key.screen.txt'))
     try {
       const first = await terminal.waitFor(/Trust this folder|Hooks need review|context left|for shortcuts|›/, 60_000)
@@ -206,8 +207,21 @@ export async function codex(runDir: string, steps: Steps): Promise<void> {
       const doctor = await launcherDoctor(box, 'codex')
       check(doctor.exitCode === 1, `doctor exited ${doctor.exitCode}`)
       check(doctor.text.includes('FAIL     Jev: rejected the key with HTTP 401'), `doctor: ${doctor.text}`)
+      // The Stop hook for the reply can write its record after the transcript
+      // shows the line. Wait for it, so that the record does not land in the
+      // next step's records.
+      const records = await poll(
+        'the check record for the reply',
+        async () => {
+          const found = await newRecords(box, from)
 
-      return `transcript: ${line.trim()}\ndoctor: exit 1, ${doctor.text.split('\n').find((l) => l.includes('Jev:'))?.trim() ?? ''}`
+          return checks(found).length > 0 ? found : undefined
+        },
+        120_000,
+      )
+      single(records, 'skipped', 'short-reply')
+
+      return `transcript: ${line.trim()}\ndoctor: exit 1, ${doctor.text.split('\n').find((l) => l.includes('Jev:'))?.trim() ?? ''}\nrecord: skipped, short-reply`
     } finally {
       await terminal.kill()
       await envLocal(box, true)
