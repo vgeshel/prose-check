@@ -66,17 +66,19 @@ async function sessionStartMessage(box: Sandbox): Promise<string | undefined> {
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name)
-      if (entry.isDirectory()) await walk(path)
+      // Subagent sessions keep their own logs under `subagent/`.
+      if (entry.isDirectory() && entry.name !== 'subagent') await walk(path)
       else if (entry.name === 'session.jsonl') logs.push({ path, mtime: (await stat(path)).mtimeMs })
     }
   }
   if (existsSync(root)) await walk(root)
   const newest = logs.sort((a, b) => b.mtime - a.mtime)[0]
   if (newest === undefined) return undefined
+  // Each record holds a hook event at `payload.event`.
   const events = (await readFile(newest.path, 'utf8'))
     .split('\n')
     .filter((line) => line.trim() !== '')
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map((line) => (JSON.parse(line) as { payload?: { event?: Record<string, unknown> } }).payload?.event ?? {})
   const hook = events.find(
     (event) =>
       event.kind === 'hook_run_terminal' &&

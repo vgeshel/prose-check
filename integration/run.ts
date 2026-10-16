@@ -146,7 +146,8 @@ await Promise.all(
     }
   }),
 )
-await run(['tmux', '-L', Terminal.SOCKET, 'kill-server'], { env: { PATH: process.env.PATH ?? '' } })
+if (harnesses.some((harness) => harness !== 'muse'))
+  await run(['tmux', '-L', Terminal.SOCKET, 'kill-server'], { env: { PATH: process.env.PATH ?? '' } })
 
 const results = all.flatMap((steps) => steps.results)
 const costs = await Promise.all(harnesses.map((harness) => cost(out, harness)))
