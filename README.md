@@ -14,6 +14,7 @@ Codex, and Muse Code.
 - [Settings](#settings)
 - [Behavior](#behavior)
 - [Debug records](#debug-records)
+- [Doctor](#doctor)
 - [Status and metrics](#status-and-metrics)
 - [State directory](#state-directory)
 - [Data and cost](#data-and-cost)
@@ -25,11 +26,14 @@ Codex, and Muse Code.
   model; the plugin sends it one request per checked reply. Each harness
   section says where to put the key.
 - For Claude Code: Claude Code with function-hooks support. The plugin was
-  tested on Claude Code 2.1.294.
-- For Codex and Muse Code: [Bun](https://bun.com) on `PATH`. The plugin's
-  hooks run its TypeScript files with Bun. They import no packages, so you do
-  not run `bun install` in the plugin directory. The plugin was tested on
-  Codex 0.156.1, Muse Code 1.4.4, and Bun 1.4.2.
+  tested on Claude Code 2.1.301.
+- For Codex and Muse Code: [Bun](https://bun.com), on `PATH` or at
+  `~/.bun/bin/bun`, where Bun's installer puts it. The plugin's hooks run its
+  TypeScript files with Bun. They import no packages, so you do not run
+  `bun install` in the plugin directory. Without Bun, every reply finishes
+  unchecked and the session start shows a warning that says so (each
+  harness's "Check the setup" section says where). The plugin was tested on
+  Codex 0.163.0, Muse Code 1.4.9, and Bun 1.4.3.
 
 The repository is the marketplace for all three harnesses. The marketplace is
 named `prose-check`, so the plugin ID is `prose-check@prose-check` everywhere.
@@ -53,6 +57,16 @@ claude plugin install prose-check@prose-check
 The install command reports that four `userConfig` options are not set. The
 plugin then uses the defaults in [Settings](#settings).
 
+Then set the API key (next section) and check the setup:
+
+```bash
+claude -p "/prose-check doctor"
+```
+
+The command tests the key against Jev and prints `Result: no problems found.`
+when the plugin can check replies; otherwise it prints each problem with its
+fix and exits 1. [Doctor](#doctor) lists the checks.
+
 ### Set the API key
 
 Add the key to the `env` block of your user settings, `~/.claude/settings.json`.
@@ -65,6 +79,16 @@ Claude Code passes that block to the plugin's environment in every session:
 ```
 
 A `TYPESAFE_API_KEY` exported in the shell that starts Claude Code works too.
+
+When the key is missing, or Jev rejects it with HTTP 401 or 403, the plugin
+adds a line to the transcript when the session starts:
+
+```text
+prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401, so replies go unchecked. Run /prose-check doctor for the fix.
+```
+
+`claude -p` does not show that line; run `claude -p "/prose-check doctor"`
+instead.
 
 ### Enable it for everyone who works in a repository
 
@@ -94,7 +118,8 @@ Each team member then:
 3. Starts `claude` in the repository. In a checkout they have not opened in
    Claude Code before, they answer "Yes, I trust this folder". Claude Code
    then adds the marketplace and loads the plugin in that session.
-4. Runs `/prose-check` to confirm that the plugin is loaded (next section).
+4. Runs `/prose-check doctor` to confirm that the plugin is loaded and can
+   check replies (see [Doctor](#doctor)).
 
 In a checkout that the member trusted before the repository enabled
 prose-check, Claude Code does not install the plugin, so `/prose-check` is an
@@ -121,7 +146,7 @@ the background when a session starts, which takes about 10 seconds. The
 plugin is loaded and has the rules when the view shows lines like these:
 
 ```text
-prose-check: prose-check 0.3.3 (claude)
+prose-check: prose-check 0.4.0 (claude)
 TYPESAFE_API_KEY: set (from environment)
 Rule cache: 12 rules, matches the current instruction files
 ```
@@ -188,6 +213,28 @@ TYPESAFE_API_KEY=<your key>
 An exported `TYPESAFE_API_KEY` overrides `.env.local`: Codex passes the
 shell's environment to hooks, and the plugin reads its environment first.
 
+### Check the setup
+
+Start a new `codex` session in the project, send one prompt, and quit. The
+plugin's SessionStart hook runs when you send the first prompt and installs
+the doctor command. Then run, in the project directory:
+
+```bash
+~/.local/state/prose-check/bin/prose-check doctor codex
+```
+
+It prints `Result: no problems found.` when the plugin can check replies;
+otherwise it prints each problem with its fix and exits 1. [Doctor](#doctor)
+lists the checks. If the shell reports `no such file or directory`, the hooks
+have not run: trust them as in steps 1–5 above and send a prompt in a new
+session.
+
+When the key is missing, Jev rejects it with HTTP 401 or 403, or Bun cannot
+be found, the SessionStart hook returns a warning as its `systemMessage`.
+Codex 0.163.0 shows it in the transcript above the first reply, as a line that
+starts with `Hook · prose-check:`. `codex exec` does not show it; run the
+doctor command instead.
+
 ### Enable it for everyone who works in a repository
 
 Commit this entry in the repository's `.codex/config.toml`:
@@ -219,7 +266,7 @@ extraction before Codex shows it (see [Behavior](#behavior)). The plugin is
 loaded and has the rules when the view shows lines like these:
 
 ```text
-prose-check 0.3.3 (codex)
+prose-check 0.4.0 (codex)
 TYPESAFE_API_KEY: set (from .env.local)
 Instruction files: AGENTS.md
 Rule cache: 14 rules, matches the current instruction files
@@ -283,7 +330,9 @@ TYPESAFE_API_KEY=<your key>
 ```
 
 Muse Code runs hooks with a reduced environment that does not include the
-shell's variables, so `.env.local` is how the hooks receive the key.
+shell's variables, so `.env.local` is how the hooks receive the key. It does
+pass the `PATH` that `muse` was started with, so the hooks find Bun when it is
+on that `PATH` or at `~/.bun/bin/bun`.
 
 ### Trust the workspace
 
@@ -297,8 +346,38 @@ in the rewrite request.
 ### Enable it for everyone who works in a repository
 
 Muse Code installs marketplace plugins for one user only. Each team member
-runs the four install commands above and creates `.env.local`. Commit a
-`.prose-check.json` if the repository needs settings other than the defaults.
+runs the four install commands above, creates `.env.local`, and checks the
+setup as in the next section. Commit a `.prose-check.json` if the repository
+needs settings other than the defaults.
+
+### Check the setup
+
+Start a new `muse` session in the project, send one prompt, and quit. The
+plugin's SessionStart hook runs when you send the first prompt and installs
+the doctor command. Then run, in the project directory:
+
+```bash
+~/.local/state/prose-check/bin/prose-check doctor muse
+```
+
+It prints `Result: no problems found.` when the plugin can check replies;
+otherwise it prints each problem with its fix and exits 1. [Doctor](#doctor)
+lists the checks. If the shell reports `no such file or directory`, the hooks
+have not run: `muse plugins inspect prose-check` must show both hooks with
+`trusted_enabled`; run `muse plugins approve prose-check` if it does not, and
+send a prompt in a new session.
+
+When the key is missing, Jev rejects it with HTTP 401 or 403, or Bun cannot
+be found, the SessionStart hook returns a warning as its `systemMessage`.
+Muse Code 1.4.9 shows it at the right end of the footer line, as
+`Hook · SessionStart · prose-check: ...`, for about five seconds after you send
+the first prompt, or until the turn ends if that is sooner. `muse exec` does
+not show it. No other hook output stays on screen longer: plain output and
+`additionalContext` go only to the model, and a failing hook's standard error
+shows in the same footer for the same time. So run the doctor command after
+you install the plugin or change the key. Muse Code also records the warning
+in the session log under `~/.local/share/muse/sessions/`, as the
+`system_message` of a `hook_run_terminal` event.
 
 ### Confirm that it is running
 
@@ -317,7 +396,7 @@ view shows lines like these (other states are listed under
 [Status and metrics](#status-and-metrics)):
 
 ```text
-prose-check 0.3.3 (muse)
+prose-check 0.4.0 (muse)
 TYPESAFE_API_KEY: set (from .env.local)
 Instruction files: AGENTS.md
 Rule cache: 10 rules, matches the current instruction files
@@ -443,14 +522,17 @@ measured request.
    - Claude Code shows it beneath the reply in the interactive transcript.
    - Codex shows the hook's `systemMessage` beneath the reply, as a line that
      starts with `Hook ·`.
-   - Muse Code 1.4.4 records the hook's `systemMessage` in its session log
-     under `~/.local/share/muse/sessions/`, but shows it nowhere: not in the
-     interactive view, not in `muse exec` output, and not in the
-     `muse exec --json` event stream. In Muse Code, the warning is visible
-     only in that session log and in the status view's `warnings shown`
-     count. Muse Code also does not show a hook's `stopReason` or standard
-     error, and its model does not relay a notice that a hook asks it to
-     send, so the plugin has no way to show the warning to the human.
+   - Muse Code records the hook's `systemMessage` in its session log under
+     `~/.local/share/muse/sessions/`. Muse Code 1.4.4 showed it nowhere else.
+     Muse Code 1.4.9 shows it at the end of the footer line as
+     `Hook · Stop · ...`, but clears it when the turn ends, about 0.2
+     seconds later, which is too short to read. It does not appear in
+     `muse exec` output or in the `muse exec --json` event stream. In
+     practice the warning is visible only in that session log and in the
+     status view's `warnings shown` count. Muse Code 1.4.4 also did not show
+     a hook's `stopReason`, and its model did not relay a notice that a hook
+     asked it to send, so the plugin has no reliable way to show the warning
+     to the human.
 
 ### Instruction files
 
@@ -554,6 +636,58 @@ Every record has `at`, `harness`, `project`, and, for checks, `session` and
 tail -n 5 ~/.local/state/prose-check/<harness>/*/debug.jsonl
 ```
 
+## Doctor
+
+The doctor command tests each condition the hooks depend on, prints a fix for
+each failure, and exits 1 when any condition fails:
+
+| Harness     | Command, run in the project                                 |
+| ----------- | ----------------------------------------------------------- |
+| Claude Code | `/prose-check doctor` in a session, or `claude -p "/prose-check doctor"` |
+| Codex       | `~/.local/state/prose-check/bin/prose-check doctor codex`   |
+| Muse Code   | `~/.local/state/prose-check/bin/prose-check doctor muse`    |
+
+`~/.local/state/prose-check/bin/prose-check doctor claude` runs
+`claude -p "/prose-check doctor"`. Add `--json` for JSON output.
+
+| Check               | Passes when                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| `Bun`               | Codex and Muse Code: Bun is on `PATH` or at `~/.bun/bin/bun`, where the hook launchers look for it. |
+| `TYPESAFE_API_KEY`  | The key is set. The line names its source: the environment or `.env.local`.                       |
+| `Jev`               | Jev accepts the key. The command sends one one-question request to `https://api.typesafe.ai/v1/systemone` and waits up to 10 seconds. It reports HTTP 401 or 403 as a rejected key, and another HTTP status, a timeout, and a failed request each as itself. |
+| `Hooks`             | Codex and Muse Code: a hook has recorded a session start in this project.                         |
+| `Instruction files` | The project root has the instruction files the harness reads (see [Instruction files](#instruction-files)). |
+| `Rules`             | The rules for the current instruction files are extracted. An extraction that has not finished is `pending`, which is not a failure. |
+| `State directory`   | The plugin can write the project's [state directory](#state-directory).                          |
+
+Each line starts with `ok`, `FAIL`, `pending`, or `skipped`. A failure looks
+like this:
+
+```text
+FAIL     Jev: rejected the key with HTTP 401
+         Fix: The key from .env.local is not a valid TypeSafe API key. Replace it. Set it in the project root's .env.local, or export it in the shell that starts Codex, then start a new session.
+```
+
+The doctor command runs in your shell and reads the key the way the hooks
+do: for Codex from your shell's environment, then `.env.local`; for Muse Code
+from `.env.local` only, because Muse Code does not pass the shell's variables
+to hooks.
+
+### Warnings at session start
+
+When a session starts, each harness's hook tests the key: a missing key, or
+a key that Jev rejects with HTTP 401 or 403, produces a one-line warning that
+names the problem and the doctor command, which prints the fix. Where the
+warning appears is described for Claude Code under
+[Set the API key](#set-the-api-key) and for Codex and Muse Code in their
+"Check the setup" sections. The plugin caches an accepted verdict per key (see
+[State directory](#state-directory)), so a working key costs one request the
+first time it is used and none after that. A rejected key is tested again at
+each session start until it works. A check that gets HTTP 401 or 403 from Jev
+clears the accepted verdict, so the next session start tests the key again.
+The session-start test waits at most 3 seconds; a timeout or another error
+produces no warning.
+
 ## Status and metrics
 
 The status view shows:
@@ -566,7 +700,9 @@ The status view shows:
 - metrics for the current harness and project, for the current session and
   for all sessions: checks completed, passes, rewrites requested, warnings
   shown, skips by reason, Jev timeouts, Jev errors, and the average Jev
-  latency of completed checks;
+  latency of completed checks. For `jev-error` and `extraction-failed`, the
+  skips line adds the cause the last such skip recorded, such as
+  `Jev error 22 (latest: HTTP 401)`; the JSON output has it under `details`;
 - the state directory and the debug file.
 
 In Claude Code the current session is the session that runs `/prose-check`.
@@ -585,7 +721,10 @@ These lines show a state other than a working plugin:
 | `Settings: invalid (<reason>); replies finish unchecked`       | Fix `.prose-check.json`.                                                               |
 
 The metrics come from `metrics.jsonl` in the state directory, which the plugin
-writes whether or not `debug` is on. Delete the file to reset them.
+writes whether or not `debug` is on. Each check line records the skip
+`reason`, and for `jev-error` and `extraction-failed` also its `detail`, such
+as `HTTP 401` or `request failed: ...`, cut to 300 characters. The lines never
+hold the request body or the key. Delete the file to reset the metrics.
 
 ## State directory
 
@@ -594,7 +733,8 @@ the project:
 
 ```text
 ~/.local/state/prose-check/
-  bin/prose-check                     the Codex and Muse Code status command
+  bin/prose-check                     the status and doctor command
+  keys/<key id>.json                  Jev's verdict on one API key
   <harness>/plugin-root               the plugin copy that harness last ran
   <harness>/<project>-<id>/
     debug.jsonl                       debug records
@@ -607,6 +747,9 @@ the project:
 
 `<harness>` is `claude`, `codex`, or `muse`. `<project>-<id>` is the project
 root's directory name and the first 16 hex digits of the SHA-256 of its path.
+`<key id>` is the first 16 hex digits of the SHA-256 of the API key; the file
+holds `accepted` or `rejected`, the HTTP status, and the time, never the key.
+Delete the `keys` directory to make the next session test the key again.
 The plugin ignores `XDG_STATE_HOME`.
 
 Claude Code keeps the rule cache in the plugin's store, a file under
@@ -620,6 +763,9 @@ for Claude Code, which forces it in every project, or delete the project's
 - Each check sends the final reply and the rule text to
   `https://api.typesafe.ai/v1/systemone`. A turn makes one Jev request, or
   two when the plugin requests a rewrite.
+- The key test at session start and the doctor command send Jev one question
+  about the text `ok`. A session start sends it only for a key without an
+  accepted verdict.
 - Each extraction is one model call with the instruction files as input. It
   normally runs once per version of the instruction files and harness; in
   Claude Code a Stop hook can start a second one (step 3 under
@@ -672,8 +818,12 @@ bun run integration
 The suite installs the plugin from `vgeshel/prose-check` in the real Claude
 Code, Codex, and Muse Code CLIs and runs it against the real Jev API. It
 installs from the default branch on GitHub, so push a change before you test
-it. Set `PROSE_CHECK_SOURCE` to another `owner/repo` to test a fork. Name one
-or more harnesses to run only those: `bun run integration claude`.
+it. Set `PROSE_CHECK_SOURCE` to another `owner/repo` to test a fork, and
+`PROSE_CHECK_REF` to a branch or tag to install that instead of the default
+branch, for example `PROSE_CHECK_REF=my-branch bun run integration`. Each CLI
+then adds the marketplace as `owner/repo#ref` (Claude Code, Muse Code) or
+`owner/repo@ref` (Codex). Name one or more harnesses to run only those:
+`bun run integration claude`.
 
 For each harness, the suite follows this README: it installs from the
 marketplace, trusts or approves the hooks the way a person does (driving
@@ -693,6 +843,18 @@ the fixture project, whose `CLAUDE.md` imports its `AGENTS.md`:
 - the skips for a short reply, a missing API key, and a Jev timeout
   (`timeoutMs` 1);
 - the status view and its metrics after these cases;
+- the doctor command after the first reply;
+- the session-start warning for a rejected key, read from the screen: the
+  Claude Code transcript when the session opens, the Codex transcript line
+  `Hook · prose-check: ...` after the first prompt, and the Muse Code footer
+  after the first prompt; and the doctor command's failure for that key;
+- Muse Code only, with Muse Code's `echo` provider in a project without
+  instruction files: the session-start warning when Bun is on neither the
+  `PATH` that Muse Code passes to hooks nor at `~/.bun/bin/bun`; the hooks
+  running Bun from `~/.bun/bin/bun` when it is not on that `PATH`; and the
+  warnings for a missing and a rejected key, read from the session log;
+- Muse Code only: a rejected key's `HTTP 401` in the metrics, the status
+  view, and the doctor command;
 - enabling the plugin for a repository with a second, new home directory
   (Claude Code and Codex);
 - updating and uninstalling.
@@ -706,14 +868,36 @@ stops before it starts when there is less, because the hooks cannot write
 their records on a full disk), `claude`, `codex`, and `muse` signed in (the suite copies
 `~/.claude/.credentials.json`, `~/.codex/auth.json`, and
 `~/.config/muse/auth.json` into its isolated homes), `TYPESAFE_API_KEY`,
-`tmux`, `git`, and `bun`. While the repository is private, the suite also
+`git`, `bun`, and `tmux`. While the repository is private, the suite also
 copies `~/.gitconfig` and `~/.config/gh/` so Git can clone it.
 
 **Isolation:** each harness runs with its own `HOME` under the output
 directory and an environment that holds only `HOME`, `PATH`, `TERM`, `USER`,
-`SHELL`, and `LANG`. Besides the sign-in files, the suite copies the
+`SHELL`, `LANG`, and the sign-in variable described below. Besides the sign-in files, the suite copies the
 onboarding and account fields of `~/.claude.json` and
 `~/.config/muse/settings.json`. It never changes your own CLI configuration.
+
+On macOS, Claude Code and Muse Code can keep their sign-in in the login
+keychain instead of a file: Claude Code when `~/.claude/.credentials.json`
+does not exist, Muse Code when `~/.config/muse/auth.json` says
+`"storage": "keychain"`. The suite does not share that sign-in with its
+sandboxes: when a sandboxed Claude Code refreshed a shared token, the
+developer's own Claude Code sign-in stopped working. Give the suite a
+credential of its own instead:
+
+- Claude Code: run `claude setup-token` and export the token it prints as
+  `CLAUDE_CODE_OAUTH_TOKEN`.
+- Muse Code: run `sh integration/muse-login.sh` once. Muse Code saves an
+  account login only in a keychain, so the script creates
+  `~/.config/prose-check/muse-home` with a keychain of its own and runs
+  `muse login` there; you approve a code in your browser. When that folder
+  exists, each Muse Code sandbox gets its login and a link to its keychain,
+  never yours. A Meta API key in `META_API_KEY` also works, if the Meta API
+  account has billing set up.
+
+The suite passes `CLAUDE_CODE_OAUTH_TOKEN` only to the Claude Code sandboxes
+and `META_API_KEY` only to the Muse Code sandbox, and stops at setup when a
+keychain sign-in has none of these.
 
 **Cost per run**, measured on 2026-10-08 at version 0.3.0 with every case
 passing on its first attempt:
@@ -732,9 +916,14 @@ A case that takes a second attempt adds one session and one or two Jev
 requests. The three harnesses run at the same time; the measured run took
 5 minutes.
 
-**Output:** `integration/runs/<time>/report.md` lists each step with its
-result and evidence. The directory also keeps each harness's home, project,
-session logs, and terminal captures.
+**Output:** `<temporary directory>/prose-check-integration/<time>/report.md`
+lists each step with its result and evidence; the suite prints the path when
+it starts and ends. `--out DIR` chooses another directory. The directory also
+keeps each harness's home, project, session logs, and terminal captures. It
+must not be inside a folder that holds a `CLAUDE.md` or `AGENTS.md`, such as
+this checkout: Claude Code loads the instruction files of every folder above a
+project, so the fixture project would get those rules too. The suite stops
+before it starts when it finds one.
 
 ## Files
 
@@ -745,15 +934,18 @@ session logs, and terminal captures.
 - `.muse-plugin/plugin.json`: the Muse Code manifest.
 - `hooks/register.ts`: the Claude Code mod. `hooks/hooks.json` names it.
 - `hooks/codex.json`, `hooks/codex.sh`, `hooks/muse.sh`,
-  `hooks/muse-start.sh`: the Codex and Muse Code hook declarations and
-  launchers.
+  `hooks/muse-start.sh`, `hooks/run.sh`: the Codex and Muse Code hook
+  declarations and launchers. `hooks/run.sh` finds Bun and runs the adapter.
 - `core/`: the logic every harness shares: rules, settings, the check,
-  records, metrics, the status view, and the state location.
+  records, metrics, the status view, the key test, the doctor report, and the
+  state location.
 - `adapters/`: the Codex and Muse Code hook commands, the background
-  extractor, and the status command.
-- `bin/prose-check`: the status command for a checkout of this repository.
+  extractor, and the status and doctor commands.
+- `bin/prose-check`: the status and doctor commands for a checkout of this
+  repository.
 - `types/index.d.ts`: the per-turn state that the Claude Code hooks share.
 - `tests/`, `integration/`: the tests and the integration suite.
+  `integration/muse-login.sh` makes the suite's own Muse Code login.
 
 ## License
 

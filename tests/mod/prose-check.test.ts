@@ -2,6 +2,8 @@ import type { HttpResponse, On } from 'claude-code'
 import type { Engine, MockClock } from 'claude-code/testing'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
+import { keyFile, keyProbeRequest } from '../../core/key'
+
 const ROOT = '/project'
 const HOME = '/home/tester'
 const CLAUDE = 'Read AGENTS.md first.\n\n@AGENTS.md'
@@ -39,8 +41,12 @@ interface World {
   extractionTimeouts: (number | undefined)[]
   jevBodies: string[]
   jevCalls: JevCall[]
-  /** The files the plugin appended lines to, by absolute path. */
+  /** The files the plugin appended lines to or wrote, by absolute path. */
   files: Map<string, string>
+  /** The key tests sent to Jev, apart from the checks in `jevBodies`. */
+  probes: number
+  /** The lines the plugin added to the transcript with `$.ui.log`. */
+  logs: string[]
   setAgents(text: string): void
 }
 interface WorldOptions {
@@ -49,6 +55,8 @@ interface WorldOptions {
   stop?: { block?: string }
   /** The text of CLAUDE.md; the default imports AGENTS.md. */
   claude?: string
+  /** Jev's answer to a key test; the default accepts the key. */
+  keyProbe?: Jev
 }
 
 /** A Jev reply that gives each rule the listed probability of a breach. */
@@ -80,6 +88,8 @@ function world(on: On, jev: readonly Jev[], options: WorldOptions = {}): World {
     jevBodies: [],
     jevCalls: [],
     files,
+    probes: 0,
+    logs: [],
     setAgents: (text) => {
       agents = text
     },
@@ -136,6 +146,13 @@ function world(on: On, jev: readonly Jev[], options: WorldOptions = {}): World {
     return { value: { isAnswered: true, text, usage: USAGE } }
   })
   on('http.fetch', (_$, e) => {
+    if (e.init?.body === keyProbeRequest()) {
+      seen.probes += 1
+      const answer = options.keyProbe ?? jevReply([0.01])
+      if (answer === 'fail') return Promise.reject(new Error('network down'))
+
+      return answer === 'hang' ? new Promise<never>(() => undefined) : { value: answer }
+    }
     seen.jevBodies.push(e.init?.body ?? '')
     seen.jevCalls.push({ url: e.url, headers: e.init?.headers ?? {} })
     const reply = replies.shift() ?? 'hang'
@@ -144,6 +161,16 @@ function world(on: On, jev: readonly Jev[], options: WorldOptions = {}): World {
     return reply === 'hang'
       ? new Promise<never>(() => undefined)
       : { value: reply }
+  })
+  on('fs.write', (_$, e) => {
+    files.set(e.path, e.text)
+
+    return { value: undefined }
+  })
+  on('ui.log', (_$, e) => {
+    seen.logs.push(e.text)
+
+    return { value: undefined }
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
@@ -711,6 +738,17 @@ describe('prose-check debug records and metrics', () => {
       expect(checks(seen, '/debug.jsonl')[0]).toEqual(
         expect.objectContaining({ outcome: 'skipped', latencyMs: 300 }),
       )
+      expect(
+        checks(seen, '/metrics.jsonl').map((line) => [line.reason, line.detail]),
+      ).toEqual([
+        ['jev-timeout', undefined],
+        ['jev-error', 'HTTP 429'],
+        ['jev-error', expect.stringMatching(/^request failed: /)],
+        ['jev-error', "Jev's response lacks a probability for every rule"],
+      ])
+      expect((await statusCommand($)).text).toContain(
+        "Jev error 3 (latest: Jev's response lacks a probability for every rule)",
+      )
     },
   )
 
@@ -886,4 +924,104 @@ describe('/prose-check', () => {
       )
     },
   )
+})
+
+const UNAUTHORIZED: HttpResponse = {
+  status: 401,
+  ok: false,
+  headers: {},
+  text: '{"detail":{"error_type":"authentication_error"}}',
+}
+const STATE_ROOT = `${HOME}/.local/state/prose-check`
+
+/** Runs `/prose-check doctor` as the person would type it. */
+function doctorCommand($: Engine, args = '') {
+  return statusCommand($, `doctor${args === '' ? '' : ` ${args}`}`)
+}
+
+describe('key warning at session start', () => {
+  test('shows a missing key in the transcript without a request', SHORT_REPLIES, async ($, on) => {
+    const seen = world(on, [], { env: { HOME } })
+    await warm($, seen)
+    expect(seen.logs).toHaveLength(1)
+    expect(seen.logs[0]).toBe(
+      'TYPESAFE_API_KEY is not set, so replies go unchecked. Run /prose-check doctor for the fix.',
+    )
+    expect(seen.probes).toBe(0)
+  })
+
+  test('tests a new key once and caches the accepted verdict', SHORT_REPLIES, async ($, on) => {
+    const seen = world(on, [])
+    await warm($, seen)
+    await warm($, seen)
+    expect(seen.logs).toEqual([])
+    expect(seen.probes).toBe(1)
+    expect(JSON.parse(seen.files.get(await keyFile(STATE_ROOT, 'key')) ?? '{}')).toEqual(
+      expect.objectContaining({ verdict: 'accepted' }),
+    )
+  })
+
+  test('shows a key that Jev rejects, at every session start', SHORT_REPLIES, async ($, on) => {
+    const seen = world(on, [], { keyProbe: UNAUTHORIZED })
+    await warm($, seen)
+    await warm($, seen)
+    expect(seen.probes).toBe(2)
+    expect(seen.logs).toHaveLength(2)
+    expect(seen.logs[0]).toContain('Jev rejected TYPESAFE_API_KEY with HTTP 401')
+    expect(seen.logs[0]).toContain('/prose-check doctor')
+  })
+
+  test('stays silent when the key test times out', SHORT_REPLIES, async ($, on) => {
+    const seen = world(on, [], { keyProbe: 'hang' })
+    await warm($, seen)
+    await seen.clock.advance(3000)
+    expect(seen.logs).toEqual([])
+    expect(seen.files.has(await keyFile(STATE_ROOT, 'key'))).toBe(false)
+  })
+
+  test('marks the key for a new test when a check sees HTTP 401', SHORT_REPLIES, async ($, on) => {
+    const seen = world(on, [UNAUTHORIZED])
+    await warm($, seen)
+    await $.turn.start({ text: 'hi', turnId: 't1' })
+    await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'A lighthouse.' })
+    expect(JSON.parse(seen.files.get(await keyFile(STATE_ROOT, 'key')) ?? '{}')).toEqual(
+      expect.objectContaining({ verdict: 'rejected', status: 401 }),
+    )
+  })
+})
+
+describe('/prose-check doctor', () => {
+  test('passes when the key, the files, the rules, and the state directory are in order', SHORT_REPLIES, async ($, on) => {
+    const seen = world(on, [])
+    await warm($, seen)
+    const result = await doctorCommand($)
+    expect(result.exitCode).toBe(0)
+    expect(result.text).toContain('prose-check 9.9.9 doctor (claude)')
+    expect(result.text).toContain('ok       TYPESAFE_API_KEY: set (from environment)')
+    expect(result.text).toContain('ok       Jev: accepted the key')
+    expect(result.text).toContain('ok       Instruction files: CLAUDE.md, AGENTS.md')
+    expect(result.text).toContain('ok       Rules: 2 rules extracted for the current instruction files')
+    expect(result.text).toContain(`ok       State directory: writable (${STATE_ROOT}/claude/`)
+    expect(result.text).toContain('Result: no problems found.')
+    expect(seen.probes).toBe(2)
+  })
+
+  test('fails with a fix for a rejected key, and prints JSON', SHORT_REPLIES, async ($, on) => {
+    world(on, [], { keyProbe: UNAUTHORIZED })
+    const result = await doctorCommand($)
+    expect(result.exitCode).toBe(1)
+    expect(result.text).toContain('FAIL     Jev: rejected the key with HTTP 401')
+    expect(result.text).toContain('Fix: The key from the environment is not a valid TypeSafe API key.')
+    const json = JSON.parse((await doctorCommand($, '--json')).text ?? '') as Record<string, unknown>
+    expect(json).toEqual(expect.objectContaining({ harness: 'claude', ok: false }))
+  })
+
+  test('fails for a missing key without a request', SHORT_REPLIES, async ($, on) => {
+    const seen = world(on, [], { env: { HOME } })
+    const result = await doctorCommand($)
+    expect(result.exitCode).toBe(1)
+    expect(result.text).toContain('FAIL     TYPESAFE_API_KEY: not set')
+    expect(result.text).toContain('skipped  Jev: not tested')
+    expect(seen.probes).toBe(0)
+  })
 })

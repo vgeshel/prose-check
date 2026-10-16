@@ -8,7 +8,7 @@ import type { Line, Sandbox, Steps } from './lib'
 import {
   PROMPTS,
   firstChecked,
-  SOURCE,
+  marketplaceSource,
   Terminal,
   check,
   checks,
@@ -17,6 +17,7 @@ import {
   poll,
   readLines,
   recordCount,
+  run,
   sandbox,
   stateFiles,
   statusJson,
@@ -50,6 +51,27 @@ export async function launcherStatus(
   })
 
   return { text: result.stdout, value: json ? statusJson(result.stdout) : undefined }
+}
+
+/** Runs the doctor command the README names; returns its exit status and output. */
+export async function launcherDoctor(
+  box: Sandbox,
+  harness: 'codex' | 'muse',
+): Promise<{ exitCode: number; text: string }> {
+  const { root } = await stateFiles(box)
+  const result = await run([join(root, 'bin/prose-check'), 'doctor', harness], { cwd: box.project, env: box.env })
+  await writeFile(join(box.dir, `doctor-${Date.now()}.txt`), `${result.stdout}\n${result.stderr}`)
+
+  return { exitCode: result.exitCode, text: result.stdout }
+}
+
+/** Asserts that the doctor command passes; returns its findings. */
+export async function doctorPasses(box: Sandbox, harness: 'codex' | 'muse'): Promise<string> {
+  const result = await launcherDoctor(box, harness)
+  check(result.exitCode === 0, `doctor exited ${result.exitCode}: ${result.text}`)
+  check(result.text.includes('Result: no problems found.'), `doctor output: ${result.text}`)
+
+  return result.text.split('\n').slice(2, -1).join('\n')
 }
 
 /** Waits until the status shows a current rule cache; asserts the extraction records. */
@@ -117,7 +139,7 @@ async function exec(box: Sandbox, text: string, log: string): Promise<string> {
 
 /** Installs from the marketplace and trusts the hooks through `/hooks`, as the README says. */
 async function install(box: Sandbox, name: string): Promise<string> {
-  await must(['codex', 'plugin', 'marketplace', 'add', SOURCE], { env: box.env, cwd: box.project })
+  await must(['codex', 'plugin', 'marketplace', 'add', marketplaceSource('codex')], { env: box.env, cwd: box.project })
   await must(['codex', 'plugin', 'add', PLUGIN], { env: box.env, cwd: box.project })
   const terminal = await Terminal.start(name, box.project, ['codex'], box.env, join(box.dir, `${name}.screen.txt`))
   try {
@@ -165,6 +187,32 @@ export async function codex(runDir: string, steps: Steps): Promise<void> {
   })
 
   await steps.step('extract the rules from AGENTS.md only', () => extracted(box, 'codex', 0))
+
+  await steps.step('pass every doctor check after the first session', () => doctorPasses(box, 'codex'))
+
+  await steps.step('show a rejected key at session start in the transcript, and fail the doctor', async () => {
+    await writeFile(join(box.project, '.env.local'), 'TYPESAFE_API_KEY=fixt123\n')
+    const terminal = await Terminal.start('codex-key', box.project, ['codex'], box.env, join(box.dir, 'key.screen.txt'))
+    try {
+      const first = await terminal.waitFor(/Trust this folder|Hooks need review|context left|for shortcuts|›/, 60_000)
+      if (/Trust this folder/.test(first)) await terminal.keys('Enter')
+      check(!/Hooks need review/.test(first), 'Codex asks to review the hooks again')
+      await Bun.sleep(2000)
+      // Codex runs SessionStart when the first prompt is sent.
+      await terminal.type(PROMPTS.ready)
+      await terminal.keys('Enter')
+      const screen = await terminal.waitFor(/Hook · prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401/, 120_000, true)
+      const line = screen.split('\n').find((l) => l.includes('Jev rejected')) ?? ''
+      const doctor = await launcherDoctor(box, 'codex')
+      check(doctor.exitCode === 1, `doctor exited ${doctor.exitCode}`)
+      check(doctor.text.includes('FAIL     Jev: rejected the key with HTTP 401'), `doctor: ${doctor.text}`)
+
+      return `transcript: ${line.trim()}\ndoctor: exit 1, ${doctor.text.split('\n').find((l) => l.includes('Jev:'))?.trim() ?? ''}`
+    } finally {
+      await terminal.kill()
+      await envLocal(box, true)
+    }
+  })
 
   await steps.step('pass a reply that follows the rules', async () => {
     const from = await recordCount(box)

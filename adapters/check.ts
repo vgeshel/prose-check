@@ -5,6 +5,12 @@
  */
 import type { JevAnswer, RulesLookup } from '../core/check'
 import { evaluate } from '../core/check'
+import type { KeySource } from '../core/key'
+import {
+  SESSION_PROBE_TIMEOUT_MS,
+  noteKeyAnswer,
+  sessionKeyWarning,
+} from '../core/key'
 import type { Options } from '../core/options'
 import type { ProjectState } from '../core/paths'
 import { AGENT_NAMES } from '../core/paths'
@@ -60,6 +66,10 @@ export interface HookContext {
   /** The settings from `.prose-check.json`, or why they are invalid. */
   settings: { options: Options } | { error: string }
   apiKey: string | undefined
+  /** Where `apiKey` came from. */
+  keySource: KeySource | undefined
+  /** The state root; undefined when `HOME` is not set. */
+  stateRoot: string | undefined
   /** The state files; undefined when `HOME` is not set. */
   state: ProjectState | undefined
 }
@@ -214,8 +224,22 @@ async function sessionStart(
     .write(state.project, JSON.stringify({ root: context.root }))
     .catch(() => undefined)
   await lookupRules(event, context, options, state, deps)
+  const key = context.apiKey
+  const message = await sessionKeyWarning(
+    key === undefined || context.keySource === undefined
+      ? undefined
+      : { key, source: context.keySource },
+    context.stateRoot,
+    context.harness,
+    {
+      read: deps.read,
+      write: deps.write,
+      probe: (body) => deps.jev(body, SESSION_PROBE_TIMEOUT_MS, key ?? ''),
+      now: deps.now,
+    },
+  )
 
-  return {}
+  return message === undefined ? {} : { systemMessage: `prose-check: ${message}` }
 }
 
 async function stop(
@@ -236,7 +260,12 @@ async function stop(
   const reply = event.last_assistant_message ?? ''
   const evaluation = await evaluate(reply, options, context.apiKey, {
     rules: () => rulesForCheck(event, context, options, state, deps),
-    jev: (body) => deps.jev(body, options.timeoutMs, context.apiKey ?? ''),
+    jev: async (body) => {
+      const answer = await deps.jev(body, options.timeoutMs, context.apiKey ?? '')
+      await noteKeyAnswer(context.apiKey ?? '', context.stateRoot, answer, deps)
+
+      return answer
+    },
   })
 
   let rewriteAllowed = true

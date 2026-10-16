@@ -67,7 +67,12 @@ function cacheLine(cache: CacheStatus): string {
 
 function counterLines(label: string, counters: Counters): string[] {
   const skips = SKIP_REASONS.filter((reason) => counters.skips[reason] > 0)
-    .map((reason) => `${REASON_LABELS[reason]} ${counters.skips[reason]}`)
+    .map((reason) => {
+      const latest = counters.details[reason]
+      const count = `${REASON_LABELS[reason]} ${counters.skips[reason]}`
+
+      return latest === undefined ? count : `${count} (latest: ${latest.detail})`
+    })
     .join(', ')
 
   return [

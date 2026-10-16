@@ -1,6 +1,6 @@
 {
   "name": "prose-check",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "license": "MIT",
   "private": true,
   "description": "Checks a coding agent's final reply against the project's writing rules with TypeSafe Jev.",

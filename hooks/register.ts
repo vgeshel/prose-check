@@ -3,6 +3,26 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Evaluation, JevAnswer, RulesLookup } from '../core/check'
 import { evaluate } from '../core/check'
+import type { Finding } from '../core/doctor'
+import {
+  doctorReport,
+  filesFinding,
+  formatDoctor,
+  jevFinding,
+  keyFinding,
+  rulesFinding,
+  stateFinding,
+} from '../core/doctor'
+import type { KeyCheck, KeyDependencies } from '../core/key'
+import {
+  DOCTOR_PROBE_TIMEOUT_MS,
+  SESSION_PROBE_TIMEOUT_MS,
+  keyCheck,
+  keyProbeRequest,
+  noteKeyAnswer,
+  recordKeyCheck,
+  sessionKeyWarning,
+} from '../core/key'
 import type { Options } from '../core/options'
 import { modOptions } from '../core/options'
 import type { ProjectState } from '../core/paths'
@@ -27,7 +47,7 @@ import {
   warning,
 } from '../core/rules'
 import { hashSources, readSources } from '../core/sources'
-import type { Status } from '../core/status'
+import type { CacheStatus, Status } from '../core/status'
 import { formatStatus } from '../core/status'
 
 /** The token cap for the host model's extraction reply. */
@@ -271,6 +291,7 @@ async function askJev(
   $: EngineInterface,
   apiKey: string,
   body: string,
+  timeoutMs: number = options.timeoutMs,
 ): Promise<JevAnswer> {
   const started = await $.clock.now()
   const timer = new AbortController()
@@ -287,13 +308,17 @@ async function askJev(
       (response) =>
         response.ok
           ? { kind: 'answered' as const, body: response.text }
-          : { kind: 'error' as const, detail: `HTTP ${response.status}` },
+          : {
+              kind: 'error' as const,
+              detail: `HTTP ${response.status}`,
+              status: response.status,
+            },
       (error: unknown) => ({
         kind: 'error' as const,
         detail: `request failed: ${String(error)}`,
       }),
     )
-  const timeout = $.clock.sleep(options.timeoutMs, { signal: timer.signal }).then(
+  const timeout = $.clock.sleep(timeoutMs, { signal: timer.signal }).then(
     () => ({ kind: 'timeout' as const }),
     () => ({ kind: 'timeout' as const }),
   )
@@ -330,23 +355,120 @@ async function recordCheck(
   )
 }
 
-/** Gathers the status view for the current project and session. */
-async function status($: EngineInterface): Promise<Status> {
-  const root = await $.session.root()
-  const files = await state($)
+async function pluginVersion($: EngineInterface): Promise<string> {
   const manifest: unknown = JSON.parse(
     await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`),
   )
-  const version =
-    isRecord(manifest) && typeof manifest.version === 'string'
-      ? manifest.version
-      : 'unknown'
-  const apiKey = await $.env.get('TYPESAFE_API_KEY')
 
+  return isRecord(manifest) && typeof manifest.version === 'string'
+    ? manifest.version
+    : 'unknown'
+}
+
+/** The rule cache for the current project and instruction files. */
+async function cacheStatus($: EngineInterface): Promise<CacheStatus> {
+  const root = await $.session.root()
   const sources = await projectSources($)
   const hash = sources.length === 0 ? undefined : await hashSources(sources)
   const cached = parseCachedRules(await $.store.get(`rules:${root}`))
   const last = parseExtractionStatus(await $.store.get(`extraction:${root}`))
+
+  return {
+    files: sources.map((source) => source.path),
+    state:
+      hash === undefined
+        ? 'no-files'
+        : cached === undefined
+          ? 'missing'
+          : cached.hash === hash
+            ? 'current'
+            : 'stale',
+    ruleCount: cached?.rules.length,
+    extracting: hash !== undefined && pending.has(hash),
+    lastFailure:
+      last !== undefined && last.hash === hash && last.status === 'failed'
+        ? { reason: last.reason ?? 'unknown', at: last.at }
+        : undefined,
+  }
+}
+
+/** The key test's effects: the state files through `$.fs`, Jev through `askJev`. */
+function keyDependencies(
+  $: EngineInterface,
+  apiKey: string,
+  timeoutMs: number,
+): KeyDependencies {
+  return {
+    read: async (path) =>
+      (await $.fs.exists(path)) ? await $.fs.read(path) : undefined,
+    write: (path, content) => $.fs.write(path, content),
+    probe: (body) => askJev($, apiKey, body, timeoutMs),
+    now: () => Date.now(),
+  }
+}
+
+/** Writes and removes a file in the project's state directory; the error, if any. */
+async function writeProbe(
+  $: EngineInterface,
+  dir: string,
+): Promise<string | undefined> {
+  try {
+    const result = await $.process.run(
+      ['sh', '-c', 'mkdir -p "$1" && : > "$1/.doctor" && rm -f "$1/.doctor"', 'sh', dir],
+      { timeoutMs: 5000 },
+    )
+
+    return result.exitCode === 0
+      ? undefined
+      : result.stderr.trim() || `exit status ${result.exitCode}`
+  } catch (error) {
+    return String(error)
+  }
+}
+
+/** Tests every condition the Claude Code hooks depend on. */
+async function doctor($: EngineInterface) {
+  const apiKey = await $.env.get('TYPESAFE_API_KEY')
+  const key = apiKey === undefined || apiKey === '' ? undefined : apiKey
+  const base = stateRoot(await $.env.get('HOME'))
+  let check: KeyCheck | undefined
+  if (key !== undefined) {
+    const deps = keyDependencies($, key, DOCTOR_PROBE_TIMEOUT_MS)
+    check = keyCheck(await deps.probe(keyProbeRequest()))
+    await recordKeyCheck(key, base, check, deps)
+  }
+  const cache = await cacheStatus($)
+  const files = await state($)
+  const findings: Finding[] = [
+    keyFinding(key === undefined ? undefined : { source: 'environment' }, 'claude'),
+    jevFinding(check, 'environment', 'claude'),
+    filesFinding(cache.files, 'claude'),
+    rulesFinding(cache, 'claude'),
+    stateFinding(files?.dir, files === undefined ? undefined : await writeProbe($, files.dir)),
+  ]
+
+  return doctorReport('claude', await pluginVersion($), await $.session.root(), findings)
+}
+
+/** Shows the session-start warning for a missing or rejected key. */
+async function warnAboutKey($: EngineInterface): Promise<void> {
+  const apiKey = await $.env.get('TYPESAFE_API_KEY')
+  const key = apiKey === undefined || apiKey === '' ? undefined : apiKey
+  const message = await sessionKeyWarning(
+    key === undefined ? undefined : { key, source: 'environment' },
+    stateRoot(await $.env.get('HOME')),
+    'claude',
+    keyDependencies($, key ?? '', SESSION_PROBE_TIMEOUT_MS),
+  )
+  if (message !== undefined) $.ui.log(message)
+}
+
+/** Gathers the status view for the current project and session. */
+async function status($: EngineInterface): Promise<Status> {
+  const root = await $.session.root()
+  const files = await state($)
+  const apiKey = await $.env.get('TYPESAFE_API_KEY')
+
   const metricsText =
     files !== undefined && (await $.fs.exists(files.metrics))
       ? await $.fs.read(files.metrics)
@@ -354,7 +476,7 @@ async function status($: EngineInterface): Promise<Status> {
 
   return {
     harness: 'claude',
-    version,
+    version: await pluginVersion($),
     projectRoot: root,
     settings: options,
     settingsError: undefined,
@@ -362,23 +484,7 @@ async function status($: EngineInterface): Promise<Status> {
       isSet: apiKey !== undefined && apiKey !== '',
       source: apiKey !== undefined && apiKey !== '' ? 'environment' : undefined,
     },
-    cache: {
-      files: sources.map((source) => source.path),
-      state:
-        hash === undefined
-          ? 'no-files'
-          : cached === undefined
-            ? 'missing'
-            : cached.hash === hash
-              ? 'current'
-              : 'stale',
-      ruleCount: cached?.rules.length,
-      extracting: hash !== undefined && pending.has(hash),
-      lastFailure:
-        last !== undefined && last.hash === hash && last.status === 'failed'
-          ? { reason: last.reason ?? 'unknown', at: last.at }
-          : undefined,
-    },
+    cache: await cacheStatus($),
     metrics: aggregate(metricsText, await $.session.id()),
     stateDir: files?.dir,
     debugFile: files?.debug,
@@ -398,8 +504,8 @@ export const register: Register = (on, values) => {
     await $.command.register({
       name: 'prose-check',
       description:
-        'Shows prose-check status: settings, API key, rule cache, and check metrics.',
-      argumentHint: '[--json]',
+        'Shows prose-check status: settings, API key, rule cache, and check metrics. `doctor` tests the setup.',
+      argumentHint: '[doctor] [--json]',
       immediate: true,
     })
     $.clock.after(0, () => {
@@ -409,6 +515,7 @@ export const register: Register = (on, values) => {
           session: await $.session.id(),
           event: 'session-start',
         })
+        await warnAboutKey($).catch(() => undefined)
         await warmRules($)
       })()
     })
@@ -417,12 +524,20 @@ export const register: Register = (on, values) => {
   })
 
   on('command.run', { command: 'prose-check' }, async ($, e) => {
+    const args = (e.args ?? '').trim().split(/\s+/)
+    const json = args.includes('--json')
+    if (args[0] === 'doctor') {
+      const report = await doctor($)
+
+      return {
+        text: json ? JSON.stringify(report, null, 2) : formatDoctor(report),
+        exitCode: report.ok ? 0 : 1,
+      }
+    }
     const current = await status($)
 
     return {
-      text: (e.args ?? '').trim() === '--json'
-        ? JSON.stringify(current, null, 2)
-        : formatStatus(current),
+      text: json ? JSON.stringify(current, null, 2) : formatStatus(current),
     }
   })
 
@@ -450,7 +565,15 @@ export const register: Register = (on, values) => {
     const apiKey = await $.env.get('TYPESAFE_API_KEY')
     const evaluation = await evaluate(reply, options, apiKey, {
       rules: () => rulesForCheck($),
-      jev: (body) => askJev($, apiKey ?? '', body),
+      jev: async (body) => {
+        const answer = await askJev($, apiKey ?? '', body)
+        await noteKeyAnswer(apiKey ?? '', stateRoot(await $.env.get('HOME')), answer, {
+          write: (path, content) => $.fs.write(path, content),
+          now: () => Date.now(),
+        })
+
+        return answer
+      },
     })
     const { rewrites } = await read($, turn)
     await recordCheck($, reply, evaluation, rewrites === 0)

@@ -54,6 +54,7 @@ export async function jev(
       return {
         kind: 'error',
         detail: `HTTP ${response.status}`,
+        status: response.status,
         latencyMs: latency(),
       }
     }

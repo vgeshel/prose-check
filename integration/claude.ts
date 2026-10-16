@@ -6,7 +6,9 @@ import type { Line, Sandbox, Steps } from './lib'
 import {
   PROMPTS,
   firstChecked,
+  REF,
   SOURCE,
+  marketplaceSource,
   Terminal,
   check,
   checks,
@@ -23,16 +25,19 @@ import {
 
 const PLUGIN = 'prose-check@prose-check'
 
-/** Writes `~/.claude/settings.json`: the API key in `env`, and the plugin's options. */
+/**
+ * Writes `~/.claude/settings.json`: the API key in `env` (the sandbox key, the
+ * given key, or none), and the plugin's options.
+ */
 async function settings(
   box: Sandbox,
   options: Record<string, unknown>,
-  withKey = true,
+  withKey: boolean | string = true,
 ): Promise<void> {
   const path = join(box.home, '.claude/settings.json')
   const current = await readJson(path, {})
   const env = { ...((current.env as Record<string, string> | undefined) ?? {}) }
-  if (withKey) env.TYPESAFE_API_KEY = box.key
+  if (withKey !== false) env.TYPESAFE_API_KEY = withKey === true ? box.key : withKey
   else delete env.TYPESAFE_API_KEY
   await writeJson(path, {
     ...current,
@@ -148,7 +153,7 @@ export async function claude(runDir: string, steps: Steps): Promise<void> {
   const box = await sandbox(runDir, 'claude')
 
   await steps.step('install from the marketplace and confirm the mod loads', async () => {
-    await must(['claude', 'plugin', 'marketplace', 'add', SOURCE], { env: box.env, cwd: box.project })
+    await must(['claude', 'plugin', 'marketplace', 'add', marketplaceSource('claude')], { env: box.env, cwd: box.project })
     await must(['claude', 'plugin', 'install', PLUGIN], { env: box.env, cwd: box.project })
     await settings(box, OPTIONS)
     const log = join(box.dir, 'loaded.debug.log')
@@ -176,10 +181,43 @@ export async function claude(runDir: string, steps: Steps): Promise<void> {
     // CLAUDE.md imports AGENTS.md, so Claude Code loads both.
     check(JSON.stringify(cache.files) === '["CLAUDE.md","AGENTS.md"]', `instruction files: ${JSON.stringify(cache.files)}`)
     check(cache.state === 'current' && cache.ruleCount > 0, `cache: ${JSON.stringify(cache)}`)
-    const success = records.find((r) => r.type === 'extraction' && r.event === 'success')
-    check(success?.ruleCount === cache.ruleCount, `extraction success record: ${JSON.stringify(success)}`)
+    // In `claude -p` the session-start extraction and the Stop hook's own one can
+    // both finish, with different rule counts; the cache holds one of them.
+    const successes = records.filter((r) => r.type === 'extraction' && r.event === 'success')
+    check(
+      successes.some((r) => r.ruleCount === cache.ruleCount),
+      `no extraction success record with the cached ${cache.ruleCount} rules: ${JSON.stringify(successes)}`,
+    )
 
     return `${result}; ${cache.ruleCount} rules cached from ${cache.files.join(', ')}`
+  })
+
+  await steps.step('pass every doctor check', async () => {
+    const result = await run(['claude', '-p', '/prose-check doctor'], { cwd: box.project, env: box.env, timeoutMs: 120_000 })
+    await writeFile(join(box.dir, 'doctor.txt'), `${result.stdout}\n${result.stderr}`)
+    check(result.exitCode === 0, `doctor exited ${result.exitCode}: ${result.stdout}`)
+    check(result.stdout.includes('Result: no problems found.'), `doctor output: ${result.stdout}`)
+
+    return result.stdout.split('\n').slice(2, -1).join('\n')
+  })
+
+  await steps.step('show a rejected key at session start in the transcript, and fail the doctor', async () => {
+    await settings(box, OPTIONS, 'fixt123')
+    const terminal = await Terminal.start('claude-key', box.project, ['claude'], box.env, join(box.dir, 'key.screen.txt'))
+    try {
+      const first = await terminal.waitFor(/trust this folder|for shortcuts|effort|Jev rejected/i, 60_000)
+      if (/trust this folder/i.test(first)) await terminal.keys('Down', 'Enter')
+      const screen = await terminal.waitFor(/Jev rejected TYPESAFE_API_KEY with HTTP 401/, 60_000, true)
+      const line = screen.split('\n').find((l) => l.includes('Jev rejected')) ?? ''
+      const doctor = await run(['claude', '-p', '/prose-check doctor'], { cwd: box.project, env: box.env, timeoutMs: 120_000 })
+      check(doctor.exitCode === 1, `doctor exited ${doctor.exitCode}`)
+      check(doctor.stdout.includes('FAIL     Jev: rejected the key with HTTP 401'), `doctor: ${doctor.stdout}`)
+
+      return `transcript: ${line.trim()}\ndoctor: exit 1, ${doctor.stdout.split('\n').find((l) => l.includes('Jev:'))?.trim() ?? ''}`
+    } finally {
+      await terminal.kill()
+      await settings(box, OPTIONS)
+    }
   })
 
   await steps.step('pass a reply that follows the rules', async () => {
@@ -284,7 +322,9 @@ export async function claude(runDir: string, steps: Steps): Promise<void> {
     const team = await sandbox(runDir, 'claude', 'claude-team')
     await mkdir(join(team.project, '.claude'), { recursive: true })
     await writeJson(join(team.project, '.claude/settings.json'), {
-      extraKnownMarketplaces: { 'prose-check': { source: { source: 'github', repo: SOURCE } } },
+      extraKnownMarketplaces: {
+        'prose-check': { source: { source: 'github', repo: SOURCE, ...(REF === '' ? {} : { ref: REF }) } },
+      },
       enabledPlugins: { [PLUGIN]: true },
     })
     await writeJson(join(team.home, '.claude/settings.json'), { env: { TYPESAFE_API_KEY: team.key } })

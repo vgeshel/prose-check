@@ -3,7 +3,7 @@
  * a terminal driver on a private tmux socket, the plugin's state files, and
  * the step report.
  */
-import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -13,6 +13,20 @@ import { projectState, stateRoot } from '../core/paths'
 
 /** The repository the suite installs the plugin from, as the README names it. */
 export const SOURCE = process.env.PROSE_CHECK_SOURCE ?? 'vgeshel/prose-check'
+
+/** The Git branch or tag to install instead of the default branch, if any. */
+export const REF = process.env.PROSE_CHECK_REF ?? ''
+
+/**
+ * The marketplace source argument for `harness`: `SOURCE`, with `REF` in the
+ * syntax each CLI accepts. Claude Code and Muse Code take `owner/repo#ref`,
+ * Codex takes `owner/repo@ref`.
+ */
+export function marketplaceSource(harness: Harness): string {
+  if (REF === '') return SOURCE
+
+  return `${SOURCE}${harness === 'codex' ? '@' : '#'}${REF}`
+}
 
 /** The fixture project's instruction files. */
 export const FIXTURE = join(import.meta.dir, 'fixture')
@@ -42,6 +56,53 @@ async function copyHomeFile(home: string, path: string): Promise<boolean> {
 }
 
 /**
+ * Sign-in variables the suite passes into a harness's sandbox when they are
+ * set: a credential made for this use, never the developer's interactive
+ * sign-in. A keychain sign-in cannot be shared with a sandbox safely: when a
+ * sandboxed Claude Code refreshes a shared token, the developer's own Claude
+ * Code sign-in stops working.
+ */
+const SIGN_IN_VARIABLES: Readonly<Partial<Record<Harness, string>>> = {
+  claude: 'CLAUDE_CODE_OAUTH_TOKEN',
+  muse: 'META_API_KEY',
+}
+
+/**
+ * A home folder that holds a Muse Code login made only for the suite, in a
+ * keychain of its own: `integration/muse-login.sh` creates it.
+ */
+export const MUSE_TEST_HOME = join(REAL_HOME, '.config/prose-check/muse-home')
+
+/** The password of the test keychain in `MUSE_TEST_HOME`; it guards only the test login. */
+export const MUSE_TEST_KEYCHAIN_PASSWORD = 'prose-check-integration'
+
+/**
+ * Gives a Muse Code sandbox the test login in `MUSE_TEST_HOME`: its
+ * `auth.json` and a link to its keychain, unlocked. The sandbox never sees the
+ * developer's own keychain.
+ */
+async function useMuseTestLogin(home: string): Promise<void> {
+  const keychains = join(MUSE_TEST_HOME, 'Library/Keychains')
+  await mkdir(join(home, '.config/muse'), { recursive: true })
+  await copyFile(join(MUSE_TEST_HOME, '.config/muse/auth.json'), join(home, '.config/muse/auth.json'))
+  await mkdir(join(home, 'Library'), { recursive: true })
+  await symlink(keychains, join(home, 'Library/Keychains'))
+  const unlocked = Bun.spawnSync(
+    ['security', 'unlock-keychain', '-p', MUSE_TEST_KEYCHAIN_PASSWORD, join(keychains, 'login.keychain-db')],
+    { env: { HOME: MUSE_TEST_HOME, PATH: '/usr/bin:/bin' }, stdout: 'ignore', stderr: 'pipe' },
+  )
+  check(unlocked.exitCode === 0, `the test keychain cannot be unlocked: ${unlocked.stderr.toString().trim()}`)
+}
+
+/** The sign-in variable for `harness`, when the developer set it. */
+function signIn(harness: Harness): Record<string, string> {
+  const name = SIGN_IN_VARIABLES[harness]
+  const value = name === undefined ? undefined : process.env[name]
+
+  return name === undefined || value === undefined || value === '' ? {} : { [name]: value }
+}
+
+/**
  * Creates a sandbox: a fresh home holding only the harness's sign-in
  * credentials and Git's credential configuration, and a Git project with the
  * fixture `CLAUDE.md` and `AGENTS.md`. The developer's own configuration is
@@ -63,8 +124,10 @@ export async function sandbox(
   await copyHomeFile(home, '.config/gh/hosts.yml')
   await copyHomeFile(home, '.config/gh/config.yml')
   if (harness === 'claude') {
-    if (!(await copyHomeFile(home, '.claude/.credentials.json')))
-      throw new Error('Claude Code is not signed in: ~/.claude/.credentials.json is missing')
+    if (!(await copyHomeFile(home, '.claude/.credentials.json')) && !process.env.CLAUDE_CODE_OAUTH_TOKEN)
+      throw new Error(
+        'Claude Code is not signed in for the suite: ~/.claude/.credentials.json is missing. Where Claude Code keeps its sign-in in the macOS keychain, run `claude setup-token` and export CLAUDE_CODE_OAUTH_TOKEN.',
+      )
     const config = JSON.parse(await readFile(join(REAL_HOME, '.claude.json'), 'utf8')) as Record<string, unknown>
     const kept = ['hasCompletedOnboarding', 'lastOnboardingVersion', 'oauthAccount', 'userID']
     await writeFile(
@@ -75,9 +138,20 @@ export async function sandbox(
   if (harness === 'codex' && !(await copyHomeFile(home, '.codex/auth.json')))
     throw new Error('Codex is not signed in: ~/.codex/auth.json is missing')
   if (harness === 'muse') {
-    if (!(await copyHomeFile(home, '.config/muse/auth.json')))
-      throw new Error('Muse Code is not signed in: ~/.config/muse/auth.json is missing')
     await copyHomeFile(home, '.config/muse/settings.json')
+    if (existsSync(join(MUSE_TEST_HOME, 'Library/Keychains/login.keychain-db'))) await useMuseTestLogin(home)
+    else {
+      if (!(await copyHomeFile(home, '.config/muse/auth.json')))
+        throw new Error('Muse Code is not signed in: ~/.config/muse/auth.json is missing')
+      // auth.json names "storage": "keychain" for a sign-in kept in the macOS keychain.
+      const auth = JSON.parse(await readFile(join(home, '.config/muse/auth.json'), 'utf8')) as {
+        providers?: Record<string, { storage?: string }>
+      }
+      if (Object.values(auth.providers ?? {}).some((provider) => provider.storage === 'keychain') && !process.env.META_API_KEY)
+        throw new Error(
+          'Muse Code keeps its sign-in in the macOS keychain, which the suite does not share. Run `sh integration/muse-login.sh` once to make a login for the suite, or export META_API_KEY.',
+        )
+    }
   }
   for (const file of ['CLAUDE.md', 'AGENTS.md'])
     await copyFile(join(FIXTURE, file), join(project, file))
@@ -96,6 +170,7 @@ export async function sandbox(
       USER: process.env.USER ?? 'tester',
       SHELL: '/bin/bash',
       LANG: 'C.UTF-8',
+      ...signIn(harness),
     },
   }
 }

@@ -4,18 +4,22 @@ import type { JevAnswer } from '../../core/check'
 import { DEFAULT_OPTIONS } from '../../core/options'
 import type { ProjectState } from '../../core/paths'
 import { projectState } from '../../core/paths'
+import { SESSION_PROBE_TIMEOUT_MS, keyFile, keyProbeRequest } from '../../core/key'
 import { rewriteRequest, warning } from '../../core/rules'
 import type { AdapterDependencies, HookContext } from '../../adapters/check'
 import { RULES_WAIT_MS, checkHook } from '../../adapters/check'
 import type { Extraction, Hook } from '../../adapters/contracts'
 
 const rules = [{ rule: 'fixture rule', question: 'fixture question' }]
+const STATE_ROOT = '/home/u/.local/state/prose-check'
 const reply = 'A'.repeat(240)
 
 interface World {
   files: Map<string, string>
   jobs: Extraction[]
   requests: { body: string; timeout: number; key: string }[]
+  /** The key tests that session starts sent, apart from the checks in `requests`. */
+  probes: { timeout: number; key: string }[]
   deps: AdapterDependencies
   state: ProjectState
   setAnswer(answer: JevAnswer | number): void
@@ -32,12 +36,13 @@ async function world(): Promise<World> {
   ])
   const jobs: Extraction[] = []
   const requests: World['requests'] = []
+  const probes: World['probes'] = []
   let answer: JevAnswer | number = 1
   let leased = false
   let clock = 1_700_000_000_000
   const sleeps: number[] = []
   const scheduled: { at: number; action: () => void }[] = []
-  const state = await projectState('/home/u/.local/state/prose-check', 'codex', '/repo')
+  const state = await projectState(STATE_ROOT, 'codex', '/repo')
   const deps: AdapterDependencies = {
     read: (path) => Promise.resolve(files.get(path)),
     write: (path, content) => {
@@ -54,7 +59,8 @@ async function world(): Promise<World> {
       return Promise.resolve(true)
     },
     jev: (body, timeout, key) => {
-      requests.push({ body, timeout, key })
+      if (body === keyProbeRequest()) probes.push({ timeout, key })
+      else requests.push({ body, timeout, key })
       return Promise.resolve(
         typeof answer === 'number'
           ? {
@@ -81,6 +87,7 @@ async function world(): Promise<World> {
     files,
     jobs,
     requests,
+    probes,
     deps,
     state,
     setAnswer: (value) => {
@@ -111,6 +118,8 @@ function context(
     root: '/repo',
     settings: { options: { ...DEFAULT_OPTIONS, debug } },
     apiKey: 'fixture-key',
+    keySource: '.env.local',
+    stateRoot: STATE_ROOT,
     state: w.state,
     ...overrides,
   }
@@ -506,5 +515,60 @@ describe('records', () => {
       systemMessage: warning(['fixture rule'], 'Codex'),
     })
     expect(w.files.get(w.state.debug)).not.toContain('fixture-key')
+  })
+
+  it('records the cause of a Jev error in the metrics line', async () => {
+    const w = await world()
+    await warm(w)
+    w.setAnswer({ kind: 'error', detail: 'HTTP 401', latencyMs: 80 })
+    await checkHook(stop(), context(w), w.deps)
+    expect(w.lines(w.state.metrics).at(-1)).toEqual({
+      at: 1_700_000_000_000,
+      session: 's1',
+      event: 'check',
+      outcome: 'skipped',
+      reason: 'jev-error',
+      detail: 'HTTP 401',
+    })
+  })
+})
+
+describe('session start key warning', () => {
+  it('shows a missing key as systemMessage without a request', async () => {
+    const w = await world()
+    const result = await checkHook(start, context(w, { apiKey: undefined, keySource: undefined }), w.deps)
+    expect(result.systemMessage).toContain('TYPESAFE_API_KEY is not set')
+    expect(result.systemMessage).toContain('prose-check doctor codex')
+    expect(w.probes).toHaveLength(0)
+    expect(w.jobs).toHaveLength(1)
+  })
+
+  it('tests a new key once with the short timeout and stays silent when Jev accepts it', async () => {
+    const w = await world()
+    expect(await checkHook(start, context(w), w.deps)).toEqual({})
+    expect(await checkHook(start, context(w), w.deps)).toEqual({})
+    expect(w.probes).toEqual([{ timeout: SESSION_PROBE_TIMEOUT_MS, key: 'fixture-key' }])
+  })
+
+  it('shows a rejected key as systemMessage, naming the status and .env.local', async () => {
+    const w = await world()
+    w.setAnswer({ kind: 'error', detail: 'HTTP 401', status: 401, latencyMs: 80 })
+    const result = await checkHook(start, context(w, { harness: 'muse' }), w.deps)
+    expect(result.systemMessage).toBe(
+      'prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401, so replies go unchecked. Run ~/.local/state/prose-check/bin/prose-check doctor muse for the fix.',
+    )
+    expect(w.jobs).toHaveLength(1)
+  })
+
+  it('marks the key for a new test when a check sees HTTP 401', async () => {
+    const w = await world()
+    await warm(w)
+    expect(w.probes).toHaveLength(1)
+    w.setAnswer({ kind: 'error', detail: 'HTTP 401', status: 401, latencyMs: 80 })
+    await checkHook(stop(), context(w), w.deps)
+    expect(JSON.parse(w.files.get(await keyFile(STATE_ROOT, 'fixture-key')) ?? '{}')).toEqual(
+      expect.objectContaining({ verdict: 'rejected', status: 401 }),
+    )
+    expect((await checkHook(start, context(w), w.deps)).systemMessage).toContain('HTTP 401')
   })
 })
