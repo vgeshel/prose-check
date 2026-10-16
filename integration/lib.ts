@@ -3,7 +3,7 @@
  * a terminal driver on a private tmux socket, the plugin's state files, and
  * the step report.
  */
-import { copyFile, cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { copyFile, cp, lstat, mkdir, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -70,6 +70,13 @@ async function linkKeychains(home: string): Promise<boolean> {
   await symlink(source, target)
 
   return true
+}
+
+/** Removes the link that `linkKeychains` made in `home`, if any. */
+export async function unlinkKeychains(home: string): Promise<void> {
+  const target = join(home, 'Library/Keychains')
+  const metadata = await lstat(target).catch(() => undefined)
+  if (metadata?.isSymbolicLink() === true) await unlink(target)
 }
 
 /** Whether the login keychain holds a generic password for `service`. */

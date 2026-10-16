@@ -11,14 +11,14 @@
  * It exits 1 when any step fails.
  */
 import { existsSync } from 'node:fs'
-import { mkdir, statfs, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, statfs, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import type { Harness } from '../core/paths'
 import { claude } from './claude'
 import { codex } from './codex'
 import type { StepResult } from './lib'
-import { REF, SOURCE, StepFailure, Steps, Terminal, checks, readLines, run } from './lib'
+import { REF, SOURCE, StepFailure, Steps, Terminal, checks, readLines, run, unlinkKeychains } from './lib'
 import { muse } from './muse'
 
 const FLOWS: Record<Harness, (runDir: string, steps: Steps) => Promise<void>> = { claude, codex, muse }
@@ -63,9 +63,7 @@ async function preflight(harnesses: readonly Harness[], out: string): Promise<vo
       `only ${Math.floor(free / 1024 ** 2)} MB is free under ${out}; the run needs ${needed / 1024 ** 2} MB`,
     )
   if ((process.env.TYPESAFE_API_KEY ?? '') === '') missing.push('TYPESAFE_API_KEY is not set')
-  // The Claude Code and Codex flows drive an interactive terminal; Muse Code's does not.
-  const terminal = harnesses.some((harness) => harness !== 'muse') ? ['tmux'] : []
-  for (const command of ['git', ...terminal, 'bun', ...harnesses]) {
+  for (const command of ['git', 'tmux', 'bun', ...harnesses]) {
     const found = await run(['sh', '-c', `command -v ${command}`], { env: { PATH: process.env.PATH ?? '' } })
     if (found.exitCode !== 0) missing.push(`${command} is not on PATH`)
   }
@@ -146,8 +144,10 @@ await Promise.all(
     }
   }),
 )
-if (harnesses.some((harness) => harness !== 'muse'))
-  await run(['tmux', '-L', Terminal.SOCKET, 'kill-server'], { env: { PATH: process.env.PATH ?? '' } })
+await run(['tmux', '-L', Terminal.SOCKET, 'kill-server'], { env: { PATH: process.env.PATH ?? '' } })
+// Remove the links to the developer's keychains that `sandbox` made.
+for (const entry of await readdir(out, { withFileTypes: true }))
+  if (entry.isDirectory()) await unlinkKeychains(join(out, entry.name, 'home'))
 
 const results = all.flatMap((steps) => steps.results)
 const costs = await Promise.all(harnesses.map((harness) => cost(out, harness)))

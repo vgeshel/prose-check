@@ -26,16 +26,14 @@ Codex, and Muse Code.
   model; the plugin sends it one request per checked reply. Each harness
   section says where to put the key.
 - For Claude Code: Claude Code with function-hooks support. The plugin was
-  tested on Claude Code 2.1.294.
+  tested on Claude Code 2.1.301.
 - For Codex and Muse Code: [Bun](https://bun.com), on `PATH` or at
   `~/.bun/bin/bun`, where Bun's installer puts it. The plugin's hooks run its
   TypeScript files with Bun. They import no packages, so you do not run
   `bun install` in the plugin directory. Without Bun, every reply finishes
   unchecked and the session start shows a warning that says so (each
   harness's "Check the setup" section says where). The plugin was tested on
-  Codex 0.156.1, Muse Code 1.4.4, and Bun 1.4.2. How each harness shows the
-  session-start warning was established on Claude Code 2.1.301, Codex
-  0.163.0, Muse Code 1.4.9, and Bun 1.4.3.
+  Codex 0.163.0, Muse Code 1.4.9, and Bun 1.4.3.
 
 The repository is the marketplace for all three harnesses. The marketplace is
 named `prose-check`, so the plugin ID is `prose-check@prose-check` everywhere.
@@ -679,8 +677,10 @@ to hooks.
 
 When a session starts, each harness's hook tests the key: a missing key, or
 a key that Jev rejects with HTTP 401 or 403, produces a one-line warning that
-names the problem and the doctor command, which prints the fix. Each harness
-section's "Check the setup" says where the warning appears. The plugin caches an accepted verdict per key (see
+names the problem and the doctor command, which prints the fix. Where the
+warning appears is described for Claude Code under
+[Set the API key](#set-the-api-key) and for Codex and Muse Code in their
+"Check the setup" sections. The plugin caches an accepted verdict per key (see
 [State directory](#state-directory)), so a working key costs one request the
 first time it is used and none after that. A rejected key is tested again at
 each session start until it works. A check that gets HTTP 401 or 403 from Jev
@@ -818,8 +818,12 @@ bun run integration
 The suite installs the plugin from `vgeshel/prose-check` in the real Claude
 Code, Codex, and Muse Code CLIs and runs it against the real Jev API. It
 installs from the default branch on GitHub, so push a change before you test
-it. Set `PROSE_CHECK_SOURCE` to another `owner/repo` to test a fork. Name one
-or more harnesses to run only those: `bun run integration claude`.
+it. Set `PROSE_CHECK_SOURCE` to another `owner/repo` to test a fork, and
+`PROSE_CHECK_REF` to a branch or tag to install that instead of the default
+branch, for example `PROSE_CHECK_REF=my-branch bun run integration`. Each CLI
+then adds the marketplace as `owner/repo#ref` (Claude Code, Muse Code) or
+`owner/repo@ref` (Codex). Name one or more harnesses to run only those:
+`bun run integration claude`.
 
 For each harness, the suite follows this README: it installs from the
 marketplace, trusts or approves the hooks the way a person does (driving
@@ -840,12 +844,15 @@ the fixture project, whose `CLAUDE.md` imports its `AGENTS.md`:
   (`timeoutMs` 1);
 - the status view and its metrics after these cases;
 - the doctor command after the first reply;
+- the session-start warning for a rejected key, read from the screen: the
+  Claude Code transcript when the session opens, the Codex transcript line
+  `Hook · prose-check: ...` after the first prompt, and the Muse Code footer
+  after the first prompt; and the doctor command's failure for that key;
 - Muse Code only, with Muse Code's `echo` provider in a project without
   instruction files: the session-start warning when Bun is on neither the
   `PATH` that Muse Code passes to hooks nor at `~/.bun/bin/bun`; the hooks
-  running Bun from `~/.bun/bin/bun` when it is not on that `PATH`; the
-  warnings for a missing and a rejected key, read from the session log; and
-  the doctor command's failure for the rejected key;
+  running Bun from `~/.bun/bin/bun` when it is not on that `PATH`; and the
+  warnings for a missing and a rejected key, read from the session log;
 - Muse Code only: a rejected key's `HTTP 401` in the metrics, the status
   view, and the doctor command;
 - enabling the plugin for a repository with a second, new home directory
@@ -861,11 +868,7 @@ stops before it starts when there is less, because the hooks cannot write
 their records on a full disk), `claude`, `codex`, and `muse` signed in (the suite copies
 `~/.claude/.credentials.json`, `~/.codex/auth.json`, and
 `~/.config/muse/auth.json` into its isolated homes), `TYPESAFE_API_KEY`,
-`git`, `bun`, and, for Claude Code and Codex, `tmux`. A sign-in that a CLI
-keeps in the macOS keychain does not reach the isolated homes: when
-`~/.config/muse/auth.json` has `"storage": "keychain"`, every Muse Code step
-that needs the model fails with `missing meta credentials`, and the steps
-that use the `echo` provider still run. While the repository is private, the suite also
+`git`, `bun`, and `tmux`. While the repository is private, the suite also
 copies `~/.gitconfig` and `~/.config/gh/` so Git can clone it.
 
 **Isolation:** each harness runs with its own `HOME` under the output
@@ -873,6 +876,20 @@ directory and an environment that holds only `HOME`, `PATH`, `TERM`, `USER`,
 `SHELL`, and `LANG`. Besides the sign-in files, the suite copies the
 onboarding and account fields of `~/.claude.json` and
 `~/.config/muse/settings.json`. It never changes your own CLI configuration.
+
+On macOS, Claude Code and Muse Code can keep their sign-in in the login
+keychain instead of a file: Claude Code when `~/.claude/.credentials.json`
+does not exist, Muse Code when `~/.config/muse/auth.json` says
+`"storage": "keychain"`. A CLI finds the login keychain through
+`$HOME/Library/Keychains`, so an isolated home has none. For such a sign-in
+the suite links `~/Library/Keychains` into that harness's sandbox home, and
+removes the link when the run ends. While the run lasts, the CLIs in the
+sandbox can read and update every item in your login keychain, as they can
+outside the suite; a CLI that refreshes its token updates your own sign-in.
+A copy of the single sign-in item in a separate keychain did not work:
+Claude Code 2.1.301 reported `Not logged in`. On other systems, a Muse Code
+`auth.json` that says `"storage": "keychain"` stops the Muse Code flow at
+setup.
 
 **Cost per run**, measured on 2026-10-08 at version 0.3.0 with every case
 passing on its first attempt:
