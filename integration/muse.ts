@@ -286,6 +286,8 @@ export async function muse(runDir: string, steps: Steps): Promise<void> {
 
   await steps.step('report a key that Jev rejects: session start, metrics, status, and doctor', async () => {
     await writeFile(join(box.project, '.env.local'), 'TYPESAFE_API_KEY=fixt123\n')
+    // Jev rejects a key in about 0.1 s, but a slow answer past timeoutMs is recorded as jev-timeout.
+    await projectSettings(box, { ...OPTIONS, timeoutMs: 10_000 })
     try {
       const from = await recordCount(box)
       await exec(box, PROMPTS.plain, 'rejected-key')
@@ -304,8 +306,9 @@ export async function muse(runDir: string, steps: Steps): Promise<void> {
       return `metrics detail HTTP 401; status: ${text.split('\n').find((l) => l.includes('latest')) ?? ''}`
     } finally {
       await envLocal(box, true)
+      await projectSettings(box, OPTIONS)
     }
-  })
+  }, 2)
 
   await steps.step('skip when Jev does not answer within timeoutMs', async () => {
     await projectSettings(box, { ...OPTIONS, timeoutMs: 1 })
