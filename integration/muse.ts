@@ -10,6 +10,7 @@ import {
   PROMPTS,
   firstChecked,
   marketplaceSource,
+  Terminal,
   check,
   must,
   newRecords,
@@ -179,6 +180,34 @@ export async function muse(runDir: string, steps: Steps): Promise<void> {
     check(accepted === undefined, `a working key produced a message: ${String(accepted)}`)
 
     return `missing: ${missing ?? ''}\nrejected: ${rejected ?? ''}\ndoctor: ${doctor.stdout.split('\n').find((l) => l.includes('Jev:')) ?? ''}`
+  })
+
+  await steps.step('show a rejected key at session start in the interactive footer', async () => {
+    await writeFile(join(bare.project, '.env.local'), 'TYPESAFE_API_KEY=fixt123\n')
+    // The echo provider's delay keeps the turn running while the footer shows the hook message.
+    const terminal = await Terminal.start(
+      'muse-key',
+      bare.project,
+      ['muse', '--provider', 'echo', '--echo-delay-ms', '8000'],
+      box.env,
+      join(box.dir, 'key.screen.txt'),
+    )
+    try {
+      const first = await terminal.waitFor(/Do you trust this workspace|Auto-review/, 60_000)
+      if (/Do you trust this workspace/.test(first)) await terminal.keys('Enter')
+      await terminal.waitFor(/Auto-review/, 30_000)
+      // Muse Code runs SessionStart when the first prompt is sent.
+      await terminal.type(PROMPTS.ready)
+      await terminal.keys('Enter')
+      const screen = await terminal.waitFor(/Hook · SessionStart · prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401/, 30_000)
+      const line = screen.split('\n').find((l) => l.includes('Hook · SessionStart')) ?? ''
+      check(line.includes('doctor muse for the fix.'), `the footer cuts the warning: ${line.trim()}`)
+
+      return `footer: ${line.trim()}`
+    } finally {
+      await terminal.kill()
+      await writeFile(join(bare.project, '.env.local'), `TYPESAFE_API_KEY=${box.key}\n`)
+    }
   })
 
   await steps.step('check the first reply in a new project, after the rule extraction it starts', async () => {

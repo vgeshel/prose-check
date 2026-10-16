@@ -190,6 +190,30 @@ export async function codex(runDir: string, steps: Steps): Promise<void> {
 
   await steps.step('pass every doctor check after the first session', () => doctorPasses(box, 'codex'))
 
+  await steps.step('show a rejected key at session start in the transcript, and fail the doctor', async () => {
+    await writeFile(join(box.project, '.env.local'), 'TYPESAFE_API_KEY=fixt123\n')
+    const terminal = await Terminal.start('codex-key', box.project, ['codex'], box.env, join(box.dir, 'key.screen.txt'))
+    try {
+      const first = await terminal.waitFor(/Trust this folder|Hooks need review|context left|for shortcuts|›/, 60_000)
+      if (/Trust this folder/.test(first)) await terminal.keys('Enter')
+      check(!/Hooks need review/.test(first), 'Codex asks to review the hooks again')
+      await Bun.sleep(2000)
+      // Codex runs SessionStart when the first prompt is sent.
+      await terminal.type(PROMPTS.ready)
+      await terminal.keys('Enter')
+      const screen = await terminal.waitFor(/Hook · prose-check: Jev rejected TYPESAFE_API_KEY with HTTP 401/, 120_000, true)
+      const line = screen.split('\n').find((l) => l.includes('Jev rejected')) ?? ''
+      const doctor = await launcherDoctor(box, 'codex')
+      check(doctor.exitCode === 1, `doctor exited ${doctor.exitCode}`)
+      check(doctor.text.includes('FAIL     Jev: rejected the key with HTTP 401'), `doctor: ${doctor.text}`)
+
+      return `transcript: ${line.trim()}\ndoctor: exit 1, ${doctor.text.split('\n').find((l) => l.includes('Jev:'))?.trim() ?? ''}`
+    } finally {
+      await terminal.kill()
+      await envLocal(box, true)
+    }
+  })
+
   await steps.step('pass a reply that follows the rules', async () => {
     const from = await recordCount(box)
     await exec(box, PROMPTS.plain, 'pass')
