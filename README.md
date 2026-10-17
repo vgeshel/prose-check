@@ -33,10 +33,14 @@ Codex, and Muse Code.
   `bun install` in the plugin directory. Without Bun, every reply finishes
   unchecked and the session start shows a warning that says so (each
   harness's "Check the setup" section says where). The plugin was tested on
-  Codex 0.163.0, Muse Code 1.4.9, and Bun 1.4.3.
+  Codex 0.163.0, Muse Code 1.4.9, and Bun 1.4.3. The repository setup
+  for Muse Code (see its "Enable it for everyone" section) was checked on
+  Muse Code 1.4.10.
 
 The repository is the marketplace for all three harnesses. The marketplace is
-named `prose-check`, so the plugin ID is `prose-check@prose-check` everywhere.
+named `prose-check`, so the plugin ID is `prose-check@prose-check` everywhere,
+except in a Codex repository setup, where it is `prose-check@<the repository's
+marketplace name>` (see [Codex](#codex)).
 
 ## Claude Code
 
@@ -237,17 +241,93 @@ doctor command instead.
 
 ### Enable it for everyone who works in a repository
 
-Commit this entry in the repository's `.codex/config.toml`:
+Codex installs a plugin for everyone who works in a repository when the
+repository commits two files.
 
-```toml
-[plugins."prose-check@prose-check"]
-enabled = true
+`.agents/plugins/marketplace.json` lists the repository's plugins. Add a
+prose-check entry to it, next to any plugins the repository already lists,
+or create the file with only this entry. The `name` is the repository's
+marketplace name; the examples use `team`:
+
+```json
+{
+  "name": "team",
+  "interface": { "displayName": "team" },
+  "plugins": [
+    {
+      "name": "prose-check",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/vgeshel/prose-check.git",
+        "ref": "<a prose-check commit>"
+      },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}
 ```
 
-The entry enables the plugin in that repository even when a member's
-`~/.codex/config.toml` disables it. Codex does not install a plugin from
-project configuration, so each team member still runs the two install
-commands, trusts the hooks as in steps 1–5 above, and sets the API key.
+`ref` pins the entry to one prose-check commit, so that every checkout uses
+the same version. To update prose-check, commit a newer `ref`.
+
+`.codex/config.toml` enables that entry, `prose-check@<marketplace name>`. It
+also disables `prose-check@prose-check`, the plugin that a member installs
+with the two install commands, so that a member who did both gets one copy:
+
+```toml
+[plugins."prose-check@team"]
+enabled = true
+
+[plugins."prose-check@prose-check"]
+enabled = false
+```
+
+Each team member then does this, without the install commands. Steps 1 and 2
+are needed in each checkout, step 3 once per machine:
+
+1. Sets the API key as in [Set the API key](#set-the-api-key-1). A key in
+   `.env.local` is needed in each checkout; an exported `TYPESAFE_API_KEY`
+   covers every checkout.
+2. Starts `codex` in the checkout, chooses "Trust and continue", and quits.
+3. Starts `codex` again. Codex installs prose-check into
+   `~/.codex/plugins/cache/<marketplace name>/prose-check/<version>/` while
+   this session starts, sometimes after the prompt appears.
+   - If Codex shows "Hooks need review", the member chooses "Review hooks".
+   - Otherwise the member runs `/hooks`. If the view does not offer
+     `t trust all`, the install has not finished: the member presses `Esc`,
+     waits a few seconds, and runs `/hooks` again.
+
+   Then the member presses `t` to trust all hooks. The SessionStart and Stop
+   rows show `1` in the Active column. The member presses `Esc` and quits.
+4. Checks the setup as in [Check the setup](#check-the-setup).
+
+These facts were established on Codex 0.163.0:
+
+- Codex installs a plugin from a repository marketplace only in an
+  interactive `codex` session. `codex exec` does not install it, and
+  `codex plugin add` and `codex plugin marketplace list` do not see the
+  repository marketplace. A member who uses only `codex exec` still starts
+  the interactive `codex` for steps 2 and 3, and starts it again after each
+  `ref` change, so that Codex installs the new version. After that,
+  `codex exec` runs the hooks. The repository's `.codex/config.toml` disables
+  that member's own install, so the two install commands do not replace these
+  steps.
+- Another clone of the repository, at another path on the same machine, needs
+  steps 1 and 2 only: the key, unless it is exported, and "Trust and
+  continue". Codex stores the hook trust by plugin name, not by path.
+- A member who installed `prose-check@prose-check` before the repository
+  enabled its entry trusts the new entry's hooks once, in step 3. Then only
+  the repository's copy runs, once per session.
+- Codex installs the commit that `ref` names, not the newest one. When the
+  repository commits a new `ref`, the member's next interactive `codex` start
+  installs that version into the cache. When the new version leaves
+  `hooks/codex.json` unchanged, its hooks run with no new trust; Codex stores
+  trust by each hook's hash, so a version that changes a hook needs `/hooks`
+  and `t` again, as in step 3. When only the prose-check repository moves
+  and the `ref` stays, Codex keeps the cached copy. The commands under
+  [Update and uninstall](#update-and-uninstall-1) apply only to the
+  two-command install.
 
 ### Confirm that it is running
 
@@ -345,10 +425,15 @@ in the rewrite request.
 
 ### Enable it for everyone who works in a repository
 
-Muse Code installs marketplace plugins for one user only. Each team member
-runs the four install commands above, creates `.env.local`, and checks the
-setup as in the next section. Commit a `.prose-check.json` if the repository
-needs settings other than the defaults.
+A repository cannot install a plugin for Muse Code. Muse Code 1.4.10 ignores
+a repository's `.agents/plugins/marketplace.json`: in a trusted workspace,
+`muse plugins marketplace list` shows none. `muse plugins install <path>
+--scope project` records the install in the running user's own Muse Code
+state, not in the repository. So each team member runs the four install
+commands above once per machine; that install covers every project on the
+machine. Each checkout needs its own `.env.local` with the key. Then the
+member checks the setup as in the next section. Commit a `.prose-check.json`
+if the repository needs settings other than the defaults.
 
 ### Check the setup
 
@@ -855,8 +940,14 @@ the fixture project, whose `CLAUDE.md` imports its `AGENTS.md`:
   warnings for a missing and a rejected key, read from the session log;
 - Muse Code only: a rejected key's `HTTP 401` in the metrics, the status
   view, and the doctor command;
-- enabling the plugin for a repository with a second, new home directory
-  (Claude Code and Codex);
+- enabling the plugin for a repository with a second, new home directory:
+  for Claude Code, a committed `.claude/settings.json`; for Codex, a committed
+  repository marketplace that also lists another plugin, and a
+  `.codex/config.toml` that enables its prose-check entry, with no install
+  commands, then a second clone that needs only folder trust;
+- Codex only: the same files in a project whose member installed
+  `prose-check@prose-check`, where only the repository's copy runs, once per
+  session;
 - updating and uninstalling.
 
 It judges each outcome from the plugin's debug records and status output.
