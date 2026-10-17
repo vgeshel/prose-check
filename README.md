@@ -38,7 +38,9 @@ Codex, and Muse Code.
   Muse Code 1.4.10.
 
 The repository is the marketplace for all three harnesses. The marketplace is
-named `prose-check`, so the plugin ID is `prose-check@prose-check` everywhere.
+named `prose-check`, so the plugin ID is `prose-check@prose-check` everywhere,
+except in a Codex repository setup, where it is `prose-check@<the repository's
+marketplace name>` (see [Codex](#codex)).
 
 ## Claude Code
 
@@ -254,13 +256,20 @@ marketplace name; the examples use `team`:
   "plugins": [
     {
       "name": "prose-check",
-      "source": { "source": "url", "url": "https://github.com/vgeshel/prose-check.git" },
+      "source": {
+        "source": "url",
+        "url": "https://github.com/vgeshel/prose-check.git",
+        "ref": "<a prose-check commit>"
+      },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
       "category": "Productivity"
     }
   ]
 }
 ```
+
+`ref` pins the entry to one prose-check commit, so that every checkout uses
+the same version. To update prose-check, commit a newer `ref`.
 
 `.codex/config.toml` enables that entry, `prose-check@<marketplace name>`. It
 also disables `prose-check@prose-check`, the plugin that a member installs
@@ -296,8 +305,8 @@ These facts were established on Codex 0.163.0:
   interactive `codex` session. `codex exec` does not install it, and
   `codex plugin add` and `codex plugin marketplace list` do not see the
   repository marketplace. A member who uses only `codex exec` still starts
-  the interactive `codex` for steps 2 and 3 once per machine; after that,
-  `codex exec` runs the hooks. The repository's `.codex/config.toml` disables
+  the interactive `codex`: step 2 once per checkout, step 3 once per machine.
+  After that, `codex exec` runs the hooks. The repository's `.codex/config.toml` disables
   that member's own install, so the two install commands do not replace these
   steps.
 - Another clone of the repository, at another path on the same machine, needs
@@ -306,7 +315,12 @@ These facts were established on Codex 0.163.0:
 - A member who installed `prose-check@prose-check` before the repository
   enabled its entry trusts the new entry's hooks once, in step 3. Then only
   the repository's copy runs, once per session.
-- Updating a plugin that Codex installed this way was not tested.
+- When the repository commits a new `ref`, the member's next interactive
+  `codex` start installs that version into the cache, and its hooks run with
+  no new trust. When only the prose-check repository moves and the `ref`
+  stays, Codex keeps the cached copy. The commands under
+  [Update and uninstall](#update-and-uninstall-1) apply only to the
+  two-command install.
 
 ### Confirm that it is running
 
