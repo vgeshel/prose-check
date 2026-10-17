@@ -33,7 +33,9 @@ Codex, and Muse Code.
   `bun install` in the plugin directory. Without Bun, every reply finishes
   unchecked and the session start shows a warning that says so (each
   harness's "Check the setup" section says where). The plugin was tested on
-  Codex 0.163.0, Muse Code 1.4.9, and Bun 1.4.3.
+  Codex 0.163.0, Muse Code 1.4.9, and Bun 1.4.3. The repository setup
+  for Muse Code (see its "Enable it for everyone" section) was checked on
+  Muse Code 1.4.10.
 
 The repository is the marketplace for all three harnesses. The marketplace is
 named `prose-check`, so the plugin ID is `prose-check@prose-check` everywhere.
@@ -278,8 +280,14 @@ Each team member then does this once, without the install commands:
 2. Starts `codex` in the repository, chooses "Trust and continue", and quits.
 3. Starts `codex` again. Codex installs prose-check into
    `~/.codex/plugins/cache/<marketplace name>/prose-check/<version>/` while
-   this session starts, sometimes after the prompt appears. The member runs
-   `/hooks`, presses `t` to trust all hooks, presses `Esc`, and quits.
+   this session starts, sometimes after the prompt appears.
+   - If Codex shows "Hooks need review", the member chooses "Review hooks".
+   - Otherwise the member runs `/hooks`. If the view does not offer
+     `t trust all`, the install has not finished: the member presses `Esc`,
+     waits a few seconds, and runs `/hooks` again.
+
+   Then the member presses `t` to trust all hooks. The SessionStart and Stop
+   rows show `1` in the Active column. The member presses `Esc` and quits.
 4. Checks the setup as in [Check the setup](#check-the-setup).
 
 These facts were established on Codex 0.163.0:
@@ -287,9 +295,11 @@ These facts were established on Codex 0.163.0:
 - Codex installs a plugin from a repository marketplace only in an
   interactive `codex` session. `codex exec` does not install it, and
   `codex plugin add` and `codex plugin marketplace list` do not see the
-  repository marketplace. A member who uses only `codex exec` runs the two
-  install commands, and the repository must then not disable
-  `prose-check@prose-check`.
+  repository marketplace. A member who uses only `codex exec` still starts
+  the interactive `codex` for steps 2 and 3 once per machine; after that,
+  `codex exec` runs the hooks. The repository's `.codex/config.toml` disables
+  that member's own install, so the two install commands do not replace these
+  steps.
 - Another clone of the repository, at another path on the same machine, needs
   only "Trust and continue". Codex stores the hook trust by plugin name, not
   by path.

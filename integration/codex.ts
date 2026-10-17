@@ -189,18 +189,37 @@ async function trustRepositoryPlugin(box: Sandbox, name: string): Promise<string
   const cache = join(box.home, `.codex/plugins/cache/${REPOSITORY_MARKETPLACE}/prose-check`)
   const terminal = await Terminal.start(name, box.project, ['codex'], box.env, join(box.dir, `${name}.screen.txt`))
   try {
-    const start = await terminal.waitFor(/Trust this folder|Hooks need review|for shortcuts/, 60_000)
-    if (/Trust this folder/.test(start)) {
+    let screen = await terminal.waitFor(/Trust this folder|Hooks need review|for shortcuts/, 60_000)
+    if (/Trust this folder/.test(screen)) {
       await terminal.keys('Enter')
-      await terminal.waitFor(/Hooks need review|for shortcuts/, 60_000)
+      screen = await terminal.waitFor(/Hooks need review|for shortcuts/, 60_000)
     }
-    await poll('Codex to install the plugin from the repository marketplace', async () => (existsSync(cache) ? true : undefined), 120_000)
-    await Bun.sleep(2000)
-    await terminal.type('/hooks')
-    await terminal.keys('Enter')
-    await terminal.waitFor(/t trust all/, 30_000)
-    await terminal.keys('t')
-    await Bun.sleep(2000)
+    if (/Review hooks/.test(screen)) {
+      await terminal.keys('Enter')
+      await terminal.waitFor(/t trust all/, 30_000)
+      await terminal.keys('t')
+      await terminal.waitFor(/SessionStart\s+1\s+1\s/, 30_000)
+    } else {
+      // Until the install finishes, /hooks lists no prose-check hooks to
+      // review: the member closes the view and opens it again.
+      await poll('Codex to install the plugin from the repository marketplace', async () => (existsSync(cache) ? true : undefined), 120_000)
+      await poll(
+        'the /hooks view to list the plugin hooks for review',
+        async () => {
+          await terminal.type('/hooks')
+          await terminal.keys('Enter')
+          await Bun.sleep(3000)
+          if (/t trust all/.test(await terminal.capture())) return true
+          await terminal.keys('Escape')
+
+          return undefined
+        },
+        120_000,
+      )
+      await terminal.keys('t')
+      await terminal.waitFor(/SessionStart\s+1\s+1\s/, 30_000)
+    }
+    check(existsSync(cache), `Codex did not install the plugin into ${cache}`)
     await terminal.keys('Escape', 'C-c', 'C-c')
   } finally {
     await terminal.kill()
