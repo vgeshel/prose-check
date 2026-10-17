@@ -237,17 +237,55 @@ doctor command instead.
 
 ### Enable it for everyone who works in a repository
 
-Commit this entry in the repository's `.codex/config.toml`:
+Commit two files in the repository. `.agents/plugins/marketplace.json` makes
+this GitHub repository a marketplace for the project:
+
+```json
+{
+  "name": "prose-check",
+  "interface": { "displayName": "prose-check" },
+  "plugins": [
+    {
+      "name": "prose-check",
+      "source": { "source": "url", "url": "https://github.com/vgeshel/prose-check.git" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+`.codex/config.toml` enables the plugin. The entry enables it even when a
+member's `~/.codex/config.toml` disables it:
 
 ```toml
 [plugins."prose-check@prose-check"]
 enabled = true
 ```
 
-The entry enables the plugin in that repository even when a member's
-`~/.codex/config.toml` disables it. Codex does not install a plugin from
-project configuration, so each team member still runs the two install
-commands, trusts the hooks as in steps 1–5 above, and sets the API key.
+Each team member then does this once, without the install commands:
+
+1. Sets the API key as in [Set the API key](#set-the-api-key-1).
+2. Starts `codex` in the repository, chooses "Trust and continue", and quits.
+3. Starts `codex` again. Codex installs prose-check into
+   `~/.codex/plugins/cache/prose-check/prose-check/<version>/` while this
+   session starts, sometimes after the prompt appears. The member runs
+   `/hooks`, presses `t` to trust all hooks, presses `Esc`, and quits.
+4. Checks the setup as in [Check the setup](#check-the-setup).
+
+These facts were established on Codex 0.163.0:
+
+- Codex installs a plugin from a repository marketplace only in an
+  interactive `codex` session. `codex exec` does not install it, and
+  `codex plugin add` and `codex plugin marketplace list` do not see the
+  repository marketplace. A member who uses only `codex exec` runs the two
+  install commands instead.
+- Another clone of the repository, at another path on the same machine, needs
+  only "Trust and continue". Codex stores the hook trust by plugin name, not
+  by path.
+- A member who also ran the two install commands gets the plugin's hooks once
+  per session, not twice.
+- Updating a plugin that Codex installed this way was not tested.
 
 ### Confirm that it is running
 
@@ -345,10 +383,15 @@ in the rewrite request.
 
 ### Enable it for everyone who works in a repository
 
-Muse Code installs marketplace plugins for one user only. Each team member
-runs the four install commands above, creates `.env.local`, and checks the
-setup as in the next section. Commit a `.prose-check.json` if the repository
-needs settings other than the defaults.
+A repository cannot install a plugin for Muse Code. Muse Code 1.4.10 ignores
+a repository's `.agents/plugins/marketplace.json`: in a trusted workspace,
+`muse plugins marketplace list` shows none. `muse plugins install <path>
+--scope project` records the install in the running user's own Muse Code
+state, not in the repository. So each team member runs the four install
+commands above once per machine; that install covers every project on the
+machine. Each checkout needs its own `.env.local` with the key. Then the
+member checks the setup as in the next section. Commit a `.prose-check.json`
+if the repository needs settings other than the defaults.
 
 ### Check the setup
 
@@ -855,8 +898,12 @@ the fixture project, whose `CLAUDE.md` imports its `AGENTS.md`:
   warnings for a missing and a rejected key, read from the session log;
 - Muse Code only: a rejected key's `HTTP 401` in the metrics, the status
   view, and the doctor command;
-- enabling the plugin for a repository with a second, new home directory
-  (Claude Code and Codex);
+- enabling the plugin for a repository with a second, new home directory:
+  for Claude Code, a committed `.claude/settings.json`; for Codex, a committed
+  repository marketplace and `.codex/config.toml`, with no install commands,
+  then a second clone that needs only folder trust;
+- Codex only: a repository marketplace in a project whose member also
+  installed the plugin, where the hooks run once per session;
 - updating and uninstalling.
 
 It judges each outcome from the plugin's debug records and status output.

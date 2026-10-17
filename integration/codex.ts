@@ -1,5 +1,5 @@
 /** The Codex integration flow, following the README's Codex steps. */
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -7,6 +7,8 @@ import { completed, metricsMatch, rewritten } from './claude'
 import type { Line, Sandbox, Steps } from './lib'
 import {
   PROMPTS,
+  REF,
+  SOURCE,
   firstChecked,
   marketplaceSource,
   Terminal,
@@ -122,6 +124,40 @@ export function warned(records: readonly Line[], agent: string): string {
   check(block?.decision === 'block', `the first hook result is not a block: ${JSON.stringify(block)}`)
 
   return `outcomes ${outcomes.join(', ')}; systemMessage: ${result.systemMessage.split('\n')[0] ?? ''}`
+}
+
+/**
+ * Commits the files that make Codex install prose-check for everyone who works
+ * in the project, as the README's "Enable it for everyone" section lists them:
+ * a repository marketplace that names the GitHub repository, and the project
+ * entry that enables the plugin.
+ */
+async function commitRepositoryMarketplace(box: Sandbox): Promise<void> {
+  await mkdir(join(box.project, '.agents/plugins'), { recursive: true })
+  await writeFile(
+    join(box.project, '.agents/plugins/marketplace.json'),
+    `${JSON.stringify(
+      {
+        name: 'prose-check',
+        interface: { displayName: 'prose-check' },
+        plugins: [
+          {
+            name: 'prose-check',
+            source: { source: 'url', url: `https://github.com/${SOURCE}.git`, ...(REF === '' ? {} : { ref: REF }) },
+            policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' },
+            category: 'Productivity',
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  await mkdir(join(box.project, '.codex'), { recursive: true })
+  await writeFile(join(box.project, '.codex/config.toml'), `[plugins."${PLUGIN}"]\nenabled = true\n`)
+  // Never `git add -A`: the project's .env.local holds the key.
+  await must(['git', '-C', box.project, 'add', '.agents', '.codex', 'AGENTS.md', 'CLAUDE.md'], { env: box.env })
+  await must(['git', '-C', box.project, '-c', 'user.name=suite', '-c', 'user.email=suite@example.com', 'commit', '-q', '-m', 'Enable prose-check'], { env: box.env })
 }
 
 /** Runs one `codex exec` session; returns the final message. */
@@ -309,17 +345,93 @@ export async function codex(runDir: string, steps: Steps): Promise<void> {
     return metricsMatch(value ?? {}, await newRecords(box, 0))
   })
 
-  await steps.step('enable the plugin for a repository: a new team member installs and trusts the hooks', async () => {
+  await steps.step('enable the plugin for a repository: a new team member trusts the folder and the hooks, without installing', async () => {
     const team = await sandbox(runDir, 'codex', 'codex-team')
-    await mkdir(join(team.project, '.codex'), { recursive: true })
-    await writeFile(join(team.project, '.codex/config.toml'), `[plugins."${PLUGIN}"]\nenabled = true\n`)
-    const trusted = await install(team, 'codex-team')
+    await commitRepositoryMarketplace(team)
     await envLocal(team, true)
+    // First start: the member trusts the folder.
+    const first = await Terminal.start('codex-team-1', team.project, ['codex'], team.env, join(team.dir, 'team-1.screen.txt'))
+    const cache = join(team.home, '.codex/plugins/cache/prose-check/prose-check')
+    try {
+      await first.waitFor(/Trust this folder/, 60_000)
+      await first.keys('Enter')
+      await first.waitFor(/context left|for shortcuts|Hooks need review/, 60_000)
+      await Bun.sleep(5000)
+    } finally {
+      await first.kill()
+    }
+    // Second start: Codex installs the plugin that the project names. The
+    // install can finish after startup, so the member opens /hooks to trust its
+    // hooks, as the README says.
+    const second = await Terminal.start('codex-team-2', team.project, ['codex'], team.env, join(team.dir, 'team-2.screen.txt'))
+    try {
+      const start = await second.waitFor(/Hooks need review|for shortcuts/, 60_000)
+      await poll('Codex to install the plugin from the repository marketplace', async () => (existsSync(cache) ? true : undefined), 120_000)
+      if (/Review hooks/.test(start)) await second.keys('Enter')
+      else {
+        await Bun.sleep(2000)
+        await second.type('/hooks')
+        await second.keys('Enter')
+      }
+      await second.waitFor(/t trust all/, 30_000)
+      await second.keys('t')
+      await second.waitFor(/SessionStart\s+1\s+1\s/, 30_000)
+      await second.keys('Escape', 'C-c', 'C-c')
+    } finally {
+      await second.kill()
+    }
+    const config = await readFile(join(team.home, '.codex/config.toml'), 'utf8')
+    check(config.includes(`[hooks.state."${PLUGIN}:hooks/codex.json:stop:0:0"]`), 'the Stop hook is not trusted')
+    check(!config.includes('[marketplaces.'), 'the member added a marketplace')
     await exec(team, PROMPTS.ready, 'team')
     const starts = (await readLines((await stateFiles(team)).metrics)).filter((l) => l.event === 'session-start')
-    check(starts.length === 1, 'the hooks did not run for the team member')
+    check(starts.length === 1, `session-start lines: ${starts.length}`)
+    const root = (await readFile(join(team.home, '.local/state/prose-check/codex/plugin-root'), 'utf8')).trim()
+    // macOS reports the temporary directory as /private/var as well as /var.
+    check(realpathSync(root).startsWith(realpathSync(cache)), `the hooks ran from ${root}, not the plugin Codex installed`)
 
-    return `hooks view: ${trusted}; the SessionStart hook ran`
+    // A second clone at another path needs only folder trust: the hook trust names no path.
+    const clone: Sandbox = { ...team, project: join(team.dir, 'project-clone') }
+    await must(['git', 'clone', '-q', team.project, clone.project], { env: team.env })
+    await envLocal(clone, true)
+    const third = await Terminal.start('codex-team-3', clone.project, ['codex'], team.env, join(team.dir, 'team-3.screen.txt'))
+    try {
+      await third.waitFor(/Trust this folder/, 60_000)
+      await third.keys('Enter')
+      const after = await third.waitFor(/context left|for shortcuts|Hooks need review/, 60_000)
+      check(!/Hooks need review/.test(after), 'Codex asks to review the hooks again in a second clone')
+      await Bun.sleep(3000)
+    } finally {
+      await third.kill()
+    }
+    await exec(clone, PROMPTS.ready, 'team-clone')
+    const cloneStarts = (await readLines((await stateFiles(clone)).metrics)).filter((l) => l.event === 'session-start')
+    check(cloneStarts.length === 1, `session-start lines in the second clone: ${cloneStarts.length}`)
+
+    return `installed by Codex at ${root}; hooks ran in the project and in a second clone with only folder trust`
+  })
+
+  await steps.step('add the repository marketplace to a project whose member installed the plugin: the hooks run once', async () => {
+    await commitRepositoryMarketplace(box)
+    const terminal = await Terminal.start('codex-both', box.project, ['codex'], box.env, join(box.dir, 'both.screen.txt'))
+    try {
+      const screen = await terminal.waitFor(/context left|for shortcuts|Hooks need review|Trust this folder/, 60_000)
+      check(!/Hooks need review|Trust this folder/.test(screen), 'Codex asks to trust the folder or review the hooks again')
+      await Bun.sleep(5000)
+    } finally {
+      await terminal.kill()
+    }
+    const from = (await readLines((await stateFiles(box)).metrics)).length
+    await exec(box, PROMPTS.ready, 'both')
+    const lines = (await readLines((await stateFiles(box)).metrics)).slice(from)
+    const starts = lines.filter((l) => l.event === 'session-start').length
+    const stops = lines.filter((l) => l.event === 'check').length
+    check(starts === 1 && stops === 1, `session-start lines ${starts}, check lines ${stops}`)
+    // The update and uninstall steps test the member's own install.
+    await rm(join(box.project, '.agents'), { recursive: true, force: true })
+    await rm(join(box.project, '.codex'), { recursive: true, force: true })
+
+    return 'one session-start line and one check line per session'
   })
 
   await steps.step('update to the latest version', async () => {
