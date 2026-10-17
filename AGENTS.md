@@ -15,8 +15,8 @@ that pass the checks under [Validation and delivery](#validation-and-delivery).
 
 ## Writing
 
-These rules apply to the README, code comments, commit messages, and the
-plugin's messages to agents and humans.
+These rules apply to the README, code comments, commit messages, the
+plugin's messages to agents and humans, and replies to the human.
 
 - Write complete English sentences in a plain, direct style. Prefer short
   sentences. Use active voice.
