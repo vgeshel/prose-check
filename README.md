@@ -237,13 +237,18 @@ doctor command instead.
 
 ### Enable it for everyone who works in a repository
 
-Commit two files in the repository. `.agents/plugins/marketplace.json` makes
-this GitHub repository a marketplace for the project:
+Codex installs a plugin for everyone who works in a repository when the
+repository commits two files.
+
+`.agents/plugins/marketplace.json` lists the repository's plugins. Add a
+prose-check entry to it, next to any plugins the repository already lists,
+or create the file with only this entry. The `name` is the repository's
+marketplace name; the examples use `team`:
 
 ```json
 {
-  "name": "prose-check",
-  "interface": { "displayName": "prose-check" },
+  "name": "team",
+  "interface": { "displayName": "team" },
   "plugins": [
     {
       "name": "prose-check",
@@ -255,12 +260,16 @@ this GitHub repository a marketplace for the project:
 }
 ```
 
-`.codex/config.toml` enables the plugin. The entry enables it even when a
-member's `~/.codex/config.toml` disables it:
+`.codex/config.toml` enables that entry, `prose-check@<marketplace name>`. It
+also disables `prose-check@prose-check`, the plugin that a member installs
+with the two install commands, so that a member who did both gets one copy:
 
 ```toml
-[plugins."prose-check@prose-check"]
+[plugins."prose-check@team"]
 enabled = true
+
+[plugins."prose-check@prose-check"]
+enabled = false
 ```
 
 Each team member then does this once, without the install commands:
@@ -268,8 +277,8 @@ Each team member then does this once, without the install commands:
 1. Sets the API key as in [Set the API key](#set-the-api-key-1).
 2. Starts `codex` in the repository, chooses "Trust and continue", and quits.
 3. Starts `codex` again. Codex installs prose-check into
-   `~/.codex/plugins/cache/prose-check/prose-check/<version>/` while this
-   session starts, sometimes after the prompt appears. The member runs
+   `~/.codex/plugins/cache/<marketplace name>/prose-check/<version>/` while
+   this session starts, sometimes after the prompt appears. The member runs
    `/hooks`, presses `t` to trust all hooks, presses `Esc`, and quits.
 4. Checks the setup as in [Check the setup](#check-the-setup).
 
@@ -279,12 +288,14 @@ These facts were established on Codex 0.163.0:
   interactive `codex` session. `codex exec` does not install it, and
   `codex plugin add` and `codex plugin marketplace list` do not see the
   repository marketplace. A member who uses only `codex exec` runs the two
-  install commands instead.
+  install commands, and the repository must then not disable
+  `prose-check@prose-check`.
 - Another clone of the repository, at another path on the same machine, needs
   only "Trust and continue". Codex stores the hook trust by plugin name, not
   by path.
-- A member who also ran the two install commands gets the plugin's hooks once
-  per session, not twice.
+- A member who installed `prose-check@prose-check` before the repository
+  enabled its entry trusts the new entry's hooks once, in step 3. Then only
+  the repository's copy runs, once per session.
 - Updating a plugin that Codex installed this way was not tested.
 
 ### Confirm that it is running
@@ -900,10 +911,12 @@ the fixture project, whose `CLAUDE.md` imports its `AGENTS.md`:
   view, and the doctor command;
 - enabling the plugin for a repository with a second, new home directory:
   for Claude Code, a committed `.claude/settings.json`; for Codex, a committed
-  repository marketplace and `.codex/config.toml`, with no install commands,
-  then a second clone that needs only folder trust;
-- Codex only: a repository marketplace in a project whose member also
-  installed the plugin, where the hooks run once per session;
+  repository marketplace that also lists another plugin, and a
+  `.codex/config.toml` that enables its prose-check entry, with no install
+  commands, then a second clone that needs only folder trust;
+- Codex only: the same files in a project whose member installed
+  `prose-check@prose-check`, where only the repository's copy runs, once per
+  session;
 - updating and uninstalling.
 
 It judges each outcome from the plugin's debug records and status output.
