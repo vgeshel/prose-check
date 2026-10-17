@@ -283,10 +283,13 @@ enabled = true
 enabled = false
 ```
 
-Each team member then does this once, without the install commands:
+Each team member then does this, without the install commands. Steps 1 and 2
+are needed in each checkout, step 3 once per machine:
 
-1. Sets the API key as in [Set the API key](#set-the-api-key-1).
-2. Starts `codex` in the repository, chooses "Trust and continue", and quits.
+1. Sets the API key as in [Set the API key](#set-the-api-key-1). A key in
+   `.env.local` is needed in each checkout; an exported `TYPESAFE_API_KEY`
+   covers every checkout.
+2. Starts `codex` in the checkout, chooses "Trust and continue", and quits.
 3. Starts `codex` again. Codex installs prose-check into
    `~/.codex/plugins/cache/<marketplace name>/prose-check/<version>/` while
    this session starts, sometimes after the prompt appears.
@@ -305,20 +308,24 @@ These facts were established on Codex 0.163.0:
   interactive `codex` session. `codex exec` does not install it, and
   `codex plugin add` and `codex plugin marketplace list` do not see the
   repository marketplace. A member who uses only `codex exec` still starts
-  the interactive `codex`: step 2 once per checkout, step 3 once per machine.
-  After that, `codex exec` runs the hooks. The repository's `.codex/config.toml` disables
+  the interactive `codex` for steps 2 and 3, and starts it again after each
+  `ref` change, so that Codex installs the new version. After that,
+  `codex exec` runs the hooks. The repository's `.codex/config.toml` disables
   that member's own install, so the two install commands do not replace these
   steps.
 - Another clone of the repository, at another path on the same machine, needs
-  only "Trust and continue". Codex stores the hook trust by plugin name, not
-  by path.
+  steps 1 and 2 only: the key, unless it is exported, and "Trust and
+  continue". Codex stores the hook trust by plugin name, not by path.
 - A member who installed `prose-check@prose-check` before the repository
   enabled its entry trusts the new entry's hooks once, in step 3. Then only
   the repository's copy runs, once per session.
-- When the repository commits a new `ref`, the member's next interactive
-  `codex` start installs that version into the cache, and its hooks run with
-  no new trust. When only the prose-check repository moves and the `ref`
-  stays, Codex keeps the cached copy. The commands under
+- Codex installs the commit that `ref` names, not the newest one. When the
+  repository commits a new `ref`, the member's next interactive `codex` start
+  installs that version into the cache. When the new version leaves
+  `hooks/codex.json` unchanged, its hooks run with no new trust; Codex stores
+  trust by each hook's hash, so a version that changes a hook needs `/hooks`
+  and `t` again, as in step 3. When only the prose-check repository moves
+  and the `ref` stays, Codex keeps the cached copy. The commands under
   [Update and uninstall](#update-and-uninstall-1) apply only to the
   two-command install.
 
