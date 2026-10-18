@@ -142,6 +142,22 @@ Restore the file so the checkout stays clean; the install stays in place:
 git checkout -- .claude/settings.json
 ```
 
+### Cloud sessions
+
+To use prose-check in a Claude Code cloud session, add these lines to the
+cloud environment's setup script:
+
+```bash
+claude plugin marketplace add vgeshel/prose-check || true
+claude plugin install prose-check@prose-check --scope user --config timeoutMs=2000 || true
+```
+
+`|| true` lets the setup script continue when a step fails. `--config
+timeoutMs=2000` sets the
+`timeoutMs` option (see [Settings](#settings)) to 2000 milliseconds. The
+session also needs `TYPESAFE_API_KEY` in its environment, as in
+[Set the API key](#set-the-api-key).
+
 ### Confirm that it is running
 
 Run `/prose-check` in a session. It prints the status view described in
